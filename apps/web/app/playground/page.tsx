@@ -10,6 +10,8 @@ import { Nav } from '../../components/ui/Nav';
 import { ToastProvider, useToast } from '../../components/ui/ToastContext';
 import { useHistory } from '../../hooks/useHistory';
 import { GistManager } from '../../components/playground/GistManager';
+import { ShareCard } from '../../components/playground/ShareCard';
+import html2canvas from 'html2canvas';
 
 const DEFAULT_CHARSET = " .:-=+*#%@";
 const DENSE_CHARSET = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
@@ -33,12 +35,7 @@ const BG_THEMES = [
   { label: 'Navy', bg: '#0a0a1a', border: 'border-blue-900/30' },
 ];
 
-// Sample images (inline SVG data URIs — tiny samples)
-const SAMPLE_IMAGES = [
-  { name: 'Circle', url: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><circle cx="100" cy="100" r="80" fill="white"/></svg>') },
-  { name: 'Star', url: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><polygon points="100,10 40,198 190,78 10,78 160,198" fill="white"/></svg>') },
-  { name: 'Gradient', url: 'data:image/svg+xml,' + encodeURIComponent('<svg xmlns="http://www.w3.org/2000/svg" width="200" height="200"><defs><linearGradient id="g"><stop offset="0%" stop-color="white"/><stop offset="100%" stop-color="black"/></linearGradient></defs><rect width="200" height="200" fill="url(#g)"/></svg>') },
-];
+
 
 const DEFAULT_OPTIONS = {
   width: 100,
@@ -62,6 +59,7 @@ const DEFAULT_OPTIONS = {
   sharpen: false,
   blur: 0,
   noise: 0,
+  overlayText: '',
 };
 
 export default function Playground() {
@@ -80,17 +78,17 @@ function PlaygroundContent() {
   const [fps, setFps] = useState(12);
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const { state: options, set: setOptions, undo, redo, canUndo, canRedo, reset } = useHistory(DEFAULT_OPTIONS);
+  const { state: options, set: setOptions, undo, redo, canUndo, canRedo, reset, historyState } = useHistory(DEFAULT_OPTIONS);
 
   // Destructure for easier access
   const {
     width, inverted, videoFps, charset, color, customColor, fontSize, bgTheme,
     removeBackground, transparentColor, colorTolerance, colorMode, renderMode,
-    posterize, clahe, frameDiff, dither, palette, sharpen, blur, noise
+    posterize, clahe, frameDiff, dither, palette, sharpen, blur, noise, overlayText
   } = options;
 
   const [showEffects, setShowEffects] = useState(false);
-  const [showSamples, setShowSamples] = useState(false);
+
   const [isDragging, setIsDragging] = useState(false);
   const [isPlaying, setIsPlaying] = useState(true);
   const [currentFrame, setCurrentFrame] = useState(0);
@@ -137,14 +135,7 @@ function PlaygroundContent() {
     }
   };
 
-  const loadSample = async (sample: typeof SAMPLE_IMAGES[0]) => {
-    const res = await fetch(sample.url);
-    const blob = await res.blob();
-    const f = new File([blob], `${sample.name}.svg`, { type: 'image/svg+xml' });
-    setFile(f);
-    setFrames([]);
-    setPreviewUrl(sample.url);
-  };
+
 
   const generate = async () => {
     if (!file) return;
@@ -360,8 +351,38 @@ function PlaygroundContent() {
       const a = document.createElement('a');
       a.href = url; a.download = `ascii-${Date.now()}.png`; a.click();
       URL.revokeObjectURL(url);
-    });
+    }, 'image/png');
   };
+
+  // Export Share Card
+  const shareCardRef = useRef<HTMLDivElement>(null);
+  const downloadShareCard = async () => {
+    if (!shareCardRef.current) return;
+
+    try {
+      toast('Generating social card...', 'info');
+      const canvas = await html2canvas(shareCardRef.current, {
+        scale: 2, // High res for retina
+        backgroundColor: null,
+        logging: false,
+        useCORS: true
+      });
+
+      canvas.toBlob((blob) => {
+        if (!blob) return;
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url; a.download = `ascii-card-${Date.now()}.png`; a.click();
+        URL.revokeObjectURL(url);
+        toast('Social card downloaded!', 'success');
+      });
+    } catch (e) {
+      console.error(e);
+      toast('Failed to generate card', 'error');
+    }
+  };
+
+
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -436,9 +457,7 @@ function PlaygroundContent() {
               <Card className="space-y-4 card-hover-animation">
                 <div className="flex items-center justify-between">
                   <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">1. Source</h3>
-                  <button onClick={() => setShowSamples(!showSamples)} className="text-[10px] text-zinc-600 hover:text-zinc-400 font-mono">
-                    {showSamples ? '[HIDE SAMPLES]' : '[SHOW SAMPLES]'}
-                  </button>
+
                 </div>
 
                 <div
@@ -465,16 +484,7 @@ function PlaygroundContent() {
                   </div>
                 </div>
 
-                {showSamples && (
-                  <div className="grid grid-cols-3 gap-2 pt-2 border-t border-zinc-900">
-                    {SAMPLE_IMAGES.map(s => (
-                      <button key={s.name} onClick={() => loadSample(s)}
-                        className="text-[9px] py-1 bg-zinc-900/50 rounded border border-zinc-800 hover:border-zinc-600 text-zinc-500 hover:text-zinc-300 transition-colors uppercase tracking-wider">
-                        {s.name}
-                      </button>
-                    ))}
-                  </div>
-                )}
+
               </Card>
 
               {/* SECTION 2: ENGINE */}
@@ -642,6 +652,13 @@ function PlaygroundContent() {
                         </div>
                       </div>
                     )}
+
+                    <div className="space-y-3 pt-5 border-t border-zinc-900">
+                      <label className="block text-[10px] text-zinc-600 uppercase font-bold tracking-widest">Text Overlay (Marquee)</label>
+                      <input type="text" value={overlayText} onChange={(e) => setOptions(p => ({ ...p, overlayText: e.target.value }))}
+                        placeholder="ENTER TEXT..."
+                        className="w-full bg-black border border-zinc-900 rounded px-3 py-2 text-[10px] font-mono text-white focus:border-green-500/50 focus:outline-none transition-all placeholder:text-zinc-800" />
+                    </div>
                   </div>
                 )}
               </Card>
@@ -708,6 +725,18 @@ function PlaygroundContent() {
                     <div>
                       <div className="text-3xl mb-3 opacity-20">⚡</div>
                       <div className="text-xs text-zinc-700 uppercase tracking-widest">Waiting for Input</div>
+                    </div>
+                  </div>
+                )}
+
+
+                {/* Text Overlay Layer */}
+                {overlayText && (
+                  <div className="absolute inset-x-0 bottom-10 flex justify-center pointer-events-none overflow-hidden pb-4">
+                    <div className="bg-black/80 px-4 py-1 rounded backdrop-blur-sm border border-zinc-800/50">
+                      <span className="font-mono text-xl md:text-3xl font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-red-500 via-yellow-500 to-blue-500 animate-pulse uppercase shadow-[0_0_20px_rgba(255,255,255,0.2)]">
+                        {overlayText}
+                      </span>
                     </div>
                   </div>
                 )}
@@ -782,6 +811,10 @@ function PlaygroundContent() {
                 <div className="h-8">
                   <GistManager content={activeFrame} />
                 </div>
+                <button onClick={downloadShareCard}
+                  className="h-8 rounded-md border-2 border-indigo-900/30 hover:border-indigo-500/50 bg-indigo-500/5 text-indigo-400 hover:text-indigo-200 transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
+                  Share Card
+                </button>
                 <button onClick={() => setFrames([])}
                   className="h-8 rounded-md border-2 border-red-900/30 hover:border-red-500/50 bg-red-500/5 text-red-600 hover:text-red-400 transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
                   Clear
@@ -821,7 +854,49 @@ function PlaygroundContent() {
             </div>
           </div>
         )}
+
+        {/* Hidden Share Card */}
+        <ShareCard
+          ref={shareCardRef}
+          content={activeFrame}
+          fontSize={fontSize}
+          color={customColor}
+          bgTheme={bgTheme}
+          isColorMode={colorMode}
+        />
       </main>
+
+      {/* History Timeline Footer */}
+      {(historyState.past.length > 0 || historyState.future.length > 0) && (
+        <div className="fixed bottom-0 left-0 right-0 h-16 bg-zinc-950 border-t border-zinc-800 flex items-center px-6 z-40 overflow-x-auto custom-scrollbar gap-2">
+          <div className="text-[10px] uppercase font-bold text-zinc-600 mr-2 sticky left-0 bg-zinc-950 pr-2">History</div>
+
+          {historyState.past.map((state, i) => (
+            <button key={`past-${i}`} onClick={() => setOptions(state)}
+              className="flex-shrink-0 w-8 h-8 rounded border border-zinc-800 bg-zinc-900/50 hover:border-zinc-600 hover:bg-zinc-800 transition-all flex items-center justify-center relative group">
+              <div className="w-3 h-3 rounded-full" style={{ background: state.color }}></div>
+              <span className="absolute -top-8 bg-zinc-800 text-white text-[9px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
+                {state.renderMode} · {state.width}ch
+              </span>
+            </button>
+          ))}
+
+          {/* Current State Indicator */}
+          <div className="flex-shrink-0 w-8 h-8 rounded border-2 border-green-500 bg-zinc-900 flex items-center justify-center">
+            <div className="w-3 h-3 rounded-full" style={{ background: color }}></div>
+          </div>
+
+          {historyState.future.map((state, i) => (
+            <button key={`future-${i}`} onClick={() => {
+              // To redo specific steps we might need a jump function, but for now just setting it works as a branch
+              setOptions(state)
+            }}
+              className="flex-shrink-0 w-8 h-8 rounded border border-zinc-800 bg-zinc-900/30 hover:border-zinc-600 hover:bg-zinc-800 transition-all flex items-center justify-center opacity-50 hover:opacity-100">
+              <div className="w-3 h-3 rounded-full" style={{ background: state.color }}></div>
+            </button>
+          ))}
+        </div>
+      )}
     </div>
   );
 }
