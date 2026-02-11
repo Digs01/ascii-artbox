@@ -1,0 +1,17 @@
+{
+    "name": "@asciiweb/library",
+    "version": "0.1.0",
+    "private": true,
+    "scripts": {
+        "generate": "ts-node src/generate.ts"
+    },
+    "dependencies": {
+        "@asciiweb/core": "*",
+        "sharp": "^0.33.2"
+    },
+    "devDependencies": {
+        "typescript": "^5.3.0",
+        "@types/node": "^20.11.0",
+        "ts-node": "^10.9.2"
+    }
+}

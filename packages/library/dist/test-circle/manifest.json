@@ -1,0 +1,11 @@
+{
+  "id": "test-circle",
+  "name": "Test Circle",
+  "frames": [
+    "000.txt"
+  ],
+  "fps": 1,
+  "tags": [
+    "user-generated"
+  ]
+}

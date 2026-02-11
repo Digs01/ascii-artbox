@@ -1,0 +1,24 @@
+{
+  "name": "clock",
+  "fps": 4,
+  "duration": 3,
+  "frames": [
+    "000.txt",
+    "001.txt",
+    "002.txt",
+    "003.txt",
+    "004.txt",
+    "005.txt",
+    "006.txt",
+    "007.txt",
+    "008.txt",
+    "009.txt",
+    "010.txt",
+    "011.txt"
+  ],
+  "loop": true,
+  "tags": [
+    "icon",
+    "time"
+  ]
+}

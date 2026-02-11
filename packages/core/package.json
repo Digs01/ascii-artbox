@@ -1,0 +1,27 @@
+{
+    "name": "@asciiweb/core",
+    "version": "0.1.0",
+    "main": "./dist/index.js",
+    "types": "./dist/index.d.ts",
+    "files": [
+        "dist"
+    ],
+    "scripts": {
+        "build": "tsc",
+        "dev": "tsc -w",
+        "lint": "eslint src/**/*.ts",
+        "test": "jest"
+    },
+    "dependencies": {
+        "sharp": "^0.33.2",
+        "fluent-ffmpeg": "^2.1.2"
+    },
+    "devDependencies": {
+        "typescript": "^5.3.0",
+        "@types/fluent-ffmpeg": "^2.1.24",
+        "@types/node": "^20.11.0",
+        "@types/jest": "^29.5.0",
+        "jest": "^29.7.0",
+        "ts-jest": "^29.1.0"
+    }
+}
