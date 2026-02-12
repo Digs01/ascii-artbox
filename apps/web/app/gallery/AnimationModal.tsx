@@ -1,7 +1,7 @@
 
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { AsciiAnimation } from '@asciiweb/react';
 
 interface AnimationModalProps {
@@ -92,33 +92,29 @@ export const MyAnimation = () => (
                 <div className="flex border-b border-zinc-800">
                     <button
                         onClick={() => setActiveTab('preview')}
-                        className={`px-6 py-3 text-sm font-medium transition-colors ${activeTab === 'preview' ? 'text-green-500 border-b-2 border-green-500' : 'text-zinc-500 hover:text-white'}`}
+                        className={`px-6 py-3 text-sm font-medium transition-colors ${activeTab === 'preview' ? 'text-white border-b-2 border-white' : 'text-zinc-500 hover:text-white'}`}
                     >
                         Preview
                     </button>
                     <button
                         onClick={() => setActiveTab('code')}
-                        className={`px-6 py-3 text-sm font-medium transition-colors ${activeTab === 'code' ? 'text-green-500 border-b-2 border-green-500' : 'text-zinc-500 hover:text-white'}`}
+                        className={`px-6 py-3 text-sm font-medium transition-colors ${activeTab === 'code' ? 'text-white border-b-2 border-white' : 'text-zinc-500 hover:text-white'}`}
                     >
                         Code
                     </button>
                 </div>
 
                 {/* Content */}
-                <div className="flex-1 overflow-auto p-6">
+                <div className="flex-1 overflow-hidden p-6 flex flex-col">
                     {activeTab === 'preview' ? (
-                        <div className="flex items-center justify-center min-h-[400px] bg-black rounded-lg border border-zinc-900 p-8">
-                            <AsciiAnimation
-                                frames={anim.frames}
-                                fps={anim.fps}
-                                color="#00ff00"
-                                style={{ fontSize: '12px', lineHeight: '14px' }}
-                            />
+                        <div className="flex-1 flex items-center justify-center bg-black rounded-lg border border-zinc-900 overflow-hidden relative">
+                            {/* Auto-fit logic: Render with a dynamic font size. */}
+                            <FitContainer frames={anim.frames} fps={anim.fps} />
                         </div>
                     ) : (
                         <div className="space-y-4">
                             <div className="relative">
-                                <pre className="bg-black p-6 rounded-lg text-sm text-green-400 font-mono overflow-x-auto border border-zinc-900">
+                                <pre className="bg-black p-6 rounded-lg text-sm text-zinc-300 font-mono overflow-x-auto border border-zinc-900">
                                     {codeSnippet}
                                 </pre>
                                 <button
@@ -149,6 +145,51 @@ export const MyAnimation = () => (
                         </div>
                     )}
                 </div>
+            </div>
+        </div>
+    );
+}
+
+function FitContainer({ frames, fps }: { frames: string[], fps: number }) {
+    const [scale, setScale] = useState(1);
+    const containerRef = useRef<HTMLDivElement>(null);
+
+    useEffect(() => {
+        if (!frames[0] || !containerRef.current) return;
+
+        const container = containerRef.current;
+        const { width: cw, height: ch } = container.getBoundingClientRect();
+
+        // Measure text content size at base font size (e.g., 10px)
+        const baseFontSize = 10;
+
+        // Strip HTML tags for accurate character count measurement
+        const plainText = frames[0].replace(/<[^>]*>/g, '').replace(/&nbsp;/g, ' ');
+        const lines = plainText.split('\n');
+        const rows = lines.length;
+        const cols = Math.max(...lines.map(l => l.length));
+
+        // Aspect ratio of a monospace char is roughly 0.6
+        const textWidth = cols * (baseFontSize * 0.6);
+        const textHeight = rows * baseFontSize;
+
+        const scaleX = cw / textWidth;
+        const scaleY = ch / textHeight;
+        const minScale = Math.min(scaleX, scaleY) * 0.9; // 90% fit
+
+        setScale(minScale);
+
+    }, [frames]);
+
+    return (
+        <div ref={containerRef} className="w-full h-full flex items-center justify-center overflow-hidden">
+            <div style={{ transform: `scale(${scale})`, transformOrigin: 'center' }}>
+                <AsciiAnimation
+                    frames={frames}
+                    fps={fps}
+                    color="white"
+                    style={{ fontSize: '10px', lineHeight: '10px' }}
+                />
             </div>
         </div>
     );

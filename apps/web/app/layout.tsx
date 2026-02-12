@@ -12,6 +12,8 @@ export const metadata: Metadata = {
 import { NextAuthProvider } from '@/components/providers/NextAuthProvider';
 import { Nav } from '@/components/ui/Nav';
 
+import { ToastProvider } from '@/components/ui/ToastContext';
+
 export default function RootLayout({
     children,
 }: Readonly<{
@@ -21,8 +23,10 @@ export default function RootLayout({
         <html lang="en">
             <body className={inter.className}>
                 <NextAuthProvider>
-                    <Nav />
-                    {children}
+                    <ToastProvider>
+                        <Nav />
+                        {children}
+                    </ToastProvider>
                 </NextAuthProvider>
             </body>
         </html>

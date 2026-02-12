@@ -4,6 +4,8 @@
 import { useState, useMemo } from 'react';
 import { GalleryCard } from './GalleryCard';
 import { AnimationModal } from './AnimationModal';
+import { useToast } from '@/components/ui/ToastContext';
+import { ConfirmDialog } from '@/components/ui/ConfirmDialog';
 
 interface Animation {
     id: string;
@@ -17,10 +19,49 @@ interface GalleryGridProps {
     animations: Animation[];
 }
 
-export function GalleryGrid({ animations }: GalleryGridProps) {
+export function GalleryGrid({ animations: initialAnimations }: GalleryGridProps) {
+    const { toast } = useToast();
+    const [animations, setAnimations] = useState<Animation[]>(initialAnimations);
     const [searchQuery, setSearchQuery] = useState('');
     const [selectedTag, setSelectedTag] = useState<string | null>(null);
     const [selectedAnim, setSelectedAnim] = useState<Animation | null>(null);
+
+    // Deletion State
+    const [deleteId, setDeleteId] = useState<string | null>(null);
+    const [isDeleting, setIsDeleting] = useState(false);
+
+    // Handle Delete Request
+    const requestDelete = (e: React.MouseEvent, id: string) => {
+        e.stopPropagation();
+        setDeleteId(id);
+    };
+
+    // Confirm Delete Action
+    const confirmDelete = async () => {
+        if (!deleteId) return;
+
+        setIsDeleting(true);
+        try {
+            const res = await fetch('/api/gallery/delete', {
+                method: 'DELETE',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ id: deleteId })
+            });
+
+            if (res.ok) {
+                setAnimations(prev => prev.filter(a => a.id !== deleteId));
+                toast('Animation deleted permanently', 'success');
+            } else {
+                toast('Failed to delete animation', 'error');
+            }
+        } catch (err) {
+            console.error(err);
+            toast('Error deleting animation', 'error');
+        } finally {
+            setIsDeleting(false);
+            setDeleteId(null);
+        }
+    };
 
     // Extract unique tags
     const allTags = useMemo(() => {
@@ -56,11 +97,9 @@ export function GalleryGrid({ animations }: GalleryGridProps) {
         return [...animations].sort((a, b) => b.frames.length - a.frames.length).slice(0, 3);
     }, [animations, searchQuery, selectedTag]);
 
-    const regularItems = useMemo(() => {
-        if (searchQuery || selectedTag) return filteredAnimations;
-        const featuredIds = new Set(featured.map(f => f.id));
-        return filteredAnimations.filter(a => !featuredIds.has(a.id));
-    }, [filteredAnimations, featured, searchQuery, selectedTag]);
+    // Regular items are just the filtered list excluding featured if we were doing that split,
+    // but we unified the grid, so this logic might be redundant if we just map filteredAnimations.
+    // The previous code seemed to map filteredAnimations directly in the main grid, so I will stick to that.
 
     return (
         <div className="space-y-8">
@@ -137,30 +176,6 @@ export function GalleryGrid({ animations }: GalleryGridProps) {
                 </p>
             )}
 
-            {/* Featured Hero Row */}
-            {featured.length > 0 && !searchQuery && !selectedTag && (
-                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-                    {featured.map((anim, idx) => (
-                        <div key={anim.id} className={idx === 0 ? 'md:col-span-2 md:row-span-2' : ''}>
-                            <GalleryCard
-                                anim={anim}
-                                featured={idx === 0}
-                                onClick={() => setSelectedAnim(anim)}
-                            />
-                        </div>
-                    ))}
-                </div>
-            )}
-
-            {/* Divider between featured and regular */}
-            {featured.length > 0 && !searchQuery && !selectedTag && regularItems.length > 0 && (
-                <div className="flex items-center gap-4">
-                    <div className="h-px flex-1 bg-zinc-800" />
-                    <span className="text-xs text-zinc-600 uppercase tracking-widest">All Animations</span>
-                    <div className="h-px flex-1 bg-zinc-800" />
-                </div>
-            )}
-
             {/* Main Grid */}
             {filteredAnimations.length === 0 ? (
                 <div className="py-20 text-center border border-dashed border-zinc-800 rounded-xl">
@@ -175,11 +190,12 @@ export function GalleryGrid({ animations }: GalleryGridProps) {
                 </div>
             ) : (
                 <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
-                    {regularItems.map((anim) => (
+                    {filteredAnimations.map((anim) => (
                         <GalleryCard
                             key={anim.id}
                             anim={anim}
                             onClick={() => setSelectedAnim(anim)}
+                            onDelete={(e) => requestDelete(e, anim.id)}
                         />
                     ))}
                 </div>
@@ -189,6 +205,17 @@ export function GalleryGrid({ animations }: GalleryGridProps) {
             <AnimationModal
                 anim={selectedAnim}
                 onClose={() => setSelectedAnim(null)}
+            />
+
+            <ConfirmDialog
+                isOpen={!!deleteId}
+                title="Delete Animation?"
+                description="This action cannot be undone. The animation will be permanently removed from your library."
+                confirmText="Delete"
+                variant="danger"
+                isLoading={isDeleting}
+                onConfirm={confirmDelete}
+                onCancel={() => setDeleteId(null)}
             />
         </div>
     );

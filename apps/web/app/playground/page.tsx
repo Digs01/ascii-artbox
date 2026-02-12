@@ -14,6 +14,8 @@ import html2canvas from 'html2canvas';
 import { Layer, LayerOptions } from '../../types/layer';
 import { useAudioAnalyzer, AudioMetrics } from '../../hooks/useAudioAnalyzer';
 import { AudioControlPanel } from '../../components/playground/AudioControlPanel';
+import { useScreenRecorder } from '../../hooks/useScreenRecorder';
+import { useAsciiCanvasRenderer } from '../../hooks/useAsciiCanvasRenderer';
 
 const DEFAULT_CHARSET = " .:-=+*#%@";
 const DENSE_CHARSET = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
@@ -70,6 +72,7 @@ function PlaygroundContent() {
   const animationRef = useRef<number>();
   // Audio State
   const audioAnalyzer = useAudioAnalyzer();
+  const canvasRef = useRef<HTMLDivElement>(null);
 
   // Animation Loop (approx 12fps global or higher?)
   // Let's run at 12fps for retro feel, or 30/60 for smoothness but update frame index based on time?
@@ -80,6 +83,25 @@ function PlaygroundContent() {
   // CompositionCanvas uses props. If we pass metrics as prop, it re-renders.
   // Since we are in React, let's try passing metrics as state for now, updated in a loop.
   const [audioMetrics, setAudioMetrics] = useState<AudioMetrics | undefined>(undefined);
+
+  // --- SEAMLESS RECORDER (Canvas) ---
+  const { stream: canvasStream } = useAsciiCanvasRenderer({
+    layers,
+    width: 800,
+    height: 600,
+    globalFrameCount,
+    audioMetrics
+  });
+
+  const { isRecording, startRecording, stopRecording, recordingTime, recordingError } = useScreenRecorder({
+    externalStream: canvasStream
+  });
+
+  useEffect(() => {
+    if (recordingError) {
+      toast(recordingError, 'error');
+    }
+  }, [recordingError, toast]);
 
   useEffect(() => {
     if (!isPlaying) return;
@@ -114,11 +136,14 @@ function PlaygroundContent() {
   }, [isPlaying, audioAnalyzer.isListening]); // Re-bind if listening changes to ensure loop catches it
 
   // Initialize with one layer if empty
+  // Initialize with one layer if empty
+  const initialized = useRef(false);
   useEffect(() => {
-    if (layers.length === 0) {
+    if (!initialized.current && layers.length === 0) {
       addLayer(null);
+      initialized.current = true;
     }
-  }, [layers.length, addLayer]);
+  }, [addLayer, layers.length]);
 
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
@@ -460,6 +485,52 @@ function PlaygroundContent() {
     }
   };
 
+  const handleFitToCanvas = (cover = false) => {
+    if (!activeLayer || !activeLayer.frames[0]) return;
+
+    // Calculate ASCII dimensions accurately
+    const lines = activeLayer.frames[0].split('\n');
+    const textHeight = lines.length * activeLayer.options.fontSize;
+
+    // Measure width using a temporary canvas for accuracy instead of estimating
+    const canvas = document.createElement('canvas');
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+
+    // Match Tailwind 'font-mono' stack as closely as possible to ensure accurate measurement
+    // Default Tailwind mono stack: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace
+    ctx.font = `${activeLayer.options.fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace`;
+
+    // Find longest line to measure
+    let maxLineWidth = 0;
+    lines.forEach(line => {
+      const w = ctx.measureText(line).width;
+      if (w > maxLineWidth) maxLineWidth = w;
+    });
+
+    const textWidth = maxLineWidth;
+
+    const canvasWidth = 800;
+    const canvasHeight = 600;
+
+    // Prevent division by zero
+    if (textWidth === 0 || textHeight === 0) return;
+
+    const scaleX = canvasWidth / textWidth;
+    const scaleY = canvasHeight / textHeight;
+
+    // For Cover: Max of scales. Increase buffer to 1.1 (10% overshoot) to guarantee coverage even with font rendering differences.
+    // For Fit: Min of scales.
+    const newScale = cover ? Math.max(scaleX, scaleY) * 1.1 : Math.min(scaleX, scaleY) * 0.95;
+
+    updateLayerTransform(activeLayer.id, {
+      scale: newScale,
+      x: 0,
+      y: 0
+    });
+    toast(cover ? 'Covered Canvas' : 'Fitted to Canvas', 'success');
+  };
+
   // Keyboard Shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
@@ -493,6 +564,25 @@ function PlaygroundContent() {
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* ─── Controls Panel ─── */}
           <div className="lg:col-span-4 space-y-4 flex flex-col h-[calc(100vh-160px)] sticky top-24">
+
+            {/* TOP ACTIONS */}
+            <div className="space-y-3 pb-2">
+              <Button onClick={generate} disabled={!activeLayer.file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)]" isLoading={loading} variant="primary">
+                {loading ? 'PROCESSING...' : 'GENERATE'}
+              </Button>
+              {loading && (
+                <div className="space-y-1 px-1">
+                  <div className="h-1 bg-zinc-900 rounded-full overflow-hidden">
+                    <div className="h-full bg-green-500 transition-all duration-300 rounded-full" style={{ width: `${progress}%` }} />
+                  </div>
+                  <div className="flex justify-between items-center text-[9px] font-mono text-zinc-600">
+                    <span>PROCESSING PIPELINE</span>
+                    <span>{Math.round(progress)}%</span>
+                  </div>
+                </div>
+              )}
+            </div>
+
             <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
 
               {/* LAYERS MANAGER */}
@@ -514,158 +604,7 @@ function PlaygroundContent() {
                 onAddLayer={() => addLayer(null)}
               />
 
-              {/* AUDIO CONTROL */}
-              <AudioControlPanel analyzer={audioAnalyzer} />
 
-              {/* TRANSFORM CONTROL (New) */}
-              <Card className="space-y-4 card-hover-animation">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Transform</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <Slider label="Opacity" value={activeLayer.transform.opacity} min={0} max={1} step={0.01}
-                    onChange={(v) => updateLayerTransform(activeLayer.id, { opacity: v })}
-                    valueDisplay={`${Math.round(activeLayer.transform.opacity * 100)}%`}
-                  />
-                  <Slider label="Scale" value={activeLayer.transform.scale} min={0.1} max={3} step={0.1}
-                    onChange={(v) => updateLayerTransform(activeLayer.id, { scale: v })}
-                    valueDisplay={`${activeLayer.transform.scale}x`}
-                  />
-                  <Slider label="Rotation" value={activeLayer.transform.rotation} min={-180} max={180} step={1}
-                    onChange={(v) => updateLayerTransform(activeLayer.id, { rotation: v })}
-                    valueDisplay={`${activeLayer.transform.rotation}°`}
-                  />
-                  <div>
-                    <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Blend Mode</label>
-                    <select
-                      value={activeLayer.transform.blendMode}
-                      onChange={(e) => updateLayerTransform(activeLayer.id, { blendMode: e.target.value as any })}
-                      className="w-full bg-black border border-zinc-900 rounded px-2 py-1 text-[10px] text-white"
-                    >
-                      <option value="normal">Normal</option>
-                      <option value="multiply">Multiply</option>
-                      <option value="screen">Screen</option>
-                      <option value="overlay">Overlay</option>
-                      <option value="darken">Darken</option>
-                      <option value="lighten">Lighten</option>
-                      <option value="difference">Difference</option>
-                      <option value="exclusion">Exclusion</option>
-                    </select>
-
-                    <div className="mt-2">
-                      <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Animation LUT</label>
-                      <select
-                        value={activeLayer.transform.lut || 'none'}
-                        onChange={(e) => updateLayerTransform(activeLayer.id, { lut: e.target.value as any })}
-                        className="w-full bg-black border border-zinc-900 rounded px-2 py-1 text-[10px] text-white"
-                      >
-                        <option value="none">None</option>
-                        <option value="spectrum">Spectrum (RGB Cycle)</option>
-                        <option value="pulse">Pulse (Brightness)</option>
-                        <option value="flicker">Flicker (Opacity)</option>
-                        <option value="glitch">Glitch (Red/Blue)</option>
-                        <option value="thermal">Thermal (Invert+Hue)</option>
-                        <option value="noir">Noir (Grayscale)</option>
-                        <option value="cyber">Cyber (Neon Glow)</option>
-                      </select>
-                    </div>
-
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={() => updateLayerTransform(activeLayer.id, { flipX: !activeLayer.transform.flipX })}
-                        className={`flex-1 py-1.5 text-[9px] uppercase font-bold rounded border ${activeLayer.transform.flipX ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
-                      >
-                        Flip H
-                      </button>
-                      <button
-                        onClick={() => updateLayerTransform(activeLayer.id, { flipY: !activeLayer.transform.flipY })}
-                        className={`flex-1 py-1.5 text-[9px] uppercase font-bold rounded border ${activeLayer.transform.flipY ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
-                      >
-                        Flip V
-                      </button>
-                    </div>
-
-                    {/* AUDIO BINDING UI */}
-                    <div className="mt-4 pt-4 border-t border-zinc-900/50">
-                      <div className="flex justify-between items-center mb-3">
-                        <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Audio React</label>
-                        <input
-                          type="checkbox"
-                          checked={activeLayer.transform.audioReact?.enabled ?? false}
-                          onChange={(e) => updateLayerTransform(activeLayer.id, {
-                            audioReact: { ...activeLayer.transform.audioReact!, enabled: e.target.checked }
-                          } as any)}
-                          className="w-3 h-3 accent-green-500 cursor-pointer"
-                        />
-                      </div>
-
-                      {activeLayer.transform.audioReact?.enabled && (
-                        <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
-                          <div className="grid grid-cols-2 gap-2">
-                            <div>
-                              <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Source</label>
-                              <select
-                                value={activeLayer.transform.audioReact.source}
-                                onChange={(e) => updateLayerTransform(activeLayer.id, {
-                                  audioReact: { ...activeLayer.transform.audioReact!, source: e.target.value as any }
-                                } as any)}
-                                className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
-                              >
-                                <option value="bass">Bass</option>
-                                <option value="mid">Mid</option>
-                                <option value="treble">Treble</option>
-                                <option value="volume">Volume</option>
-                              </select>
-                            </div>
-                            <div>
-                              <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Target</label>
-                              <select
-                                value={activeLayer.transform.audioReact.target}
-                                onChange={(e) => updateLayerTransform(activeLayer.id, {
-                                  audioReact: { ...activeLayer.transform.audioReact!, target: e.target.value as any }
-                                } as any)}
-                                className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
-                              >
-                                <option value="scale">Scale</option>
-                                <option value="opacity">Opacity</option>
-                                <option value="rotation">Rotation</option>
-                                <option value="distortion">Distortion (Glitch)</option>
-                                <option value="hue">Hue Shift</option>
-                                <option value="rgb-split">RGB Split (Chromatic)</option>
-                              </select>
-                            </div>
-                          </div>
-
-                          <div className="space-y-1">
-                            <div className="flex justify-between text-[9px]">
-                              <span className="text-zinc-600 uppercase">Strength</span>
-                              <span className="text-zinc-400">{(activeLayer.transform.audioReact.strength * 100).toFixed(0)}%</span>
-                            </div>
-                            <input
-                              type="range"
-                              min="0"
-                              max="2"
-                              step="0.05"
-                              value={activeLayer.transform.audioReact.strength}
-                              onChange={(e) => updateLayerTransform(activeLayer.id, {
-                                audioReact: { ...activeLayer.transform.audioReact!, strength: parseFloat(e.target.value) }
-                              } as any)}
-                              className="w-full h-1 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-green-500"
-                            />
-                          </div>
-
-                          <button
-                            onClick={() => updateLayerTransform(activeLayer.id, {
-                              audioReact: { ...activeLayer.transform.audioReact!, invert: !activeLayer.transform.audioReact?.invert }
-                            } as any)}
-                            className={`w-full py-1 text-[8px] uppercase font-bold rounded border ${activeLayer.transform.audioReact.invert ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-600'}`}
-                          >
-                            Invert Signal
-                          </button>
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                </div>
-              </Card>
 
               {/* SECTION 1: Source */}
               <Card className="space-y-4 card-hover-animation">
@@ -698,7 +637,6 @@ function PlaygroundContent() {
                   </div>
                 </div>
 
-                {/* Source Preview */}
                 {activeLayer.previewUrl && activeLayer.file && (
                   <div className="mt-3 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950">
                     {activeLayer.type === 'video' ? (
@@ -709,6 +647,9 @@ function PlaygroundContent() {
                   </div>
                 )}
               </Card>
+
+
+
 
               {/* SECTION 2: ENGINE */}
               <Card className="space-y-5 card-hover-animation">
@@ -808,6 +749,196 @@ function PlaygroundContent() {
                 </div>
               </Card>
 
+              {/* TRANSFORM CONTROL (New) */}
+              <Card className="space-y-4 card-hover-animation">
+                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Transform</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <Slider label="Position X" value={activeLayer.transform.x} min={-400} max={400} step={1}
+                    onChange={(v) => updateLayerTransform(activeLayer.id, { x: v })}
+                    valueDisplay={`${activeLayer.transform.x}px`}
+                  />
+                  <Slider label="Position Y" value={activeLayer.transform.y} min={-300} max={300} step={1}
+                    onChange={(v) => updateLayerTransform(activeLayer.id, { y: v })}
+                    valueDisplay={`${activeLayer.transform.y}px`}
+                  />
+                  <div className="col-span-2 flex justify-end">
+                    <button onClick={() => updateLayerTransform(activeLayer.id, { x: 0, y: 0 })} className="text-[9px] text-zinc-500 hover:text-zinc-300 uppercase tracking-wider">Reset Position</button>
+                  </div>
+
+                  <Slider label="Opacity" value={activeLayer.transform.opacity} min={0} max={1} step={0.01}
+                    onChange={(v) => updateLayerTransform(activeLayer.id, { opacity: v })}
+                    valueDisplay={`${Math.round(activeLayer.transform.opacity * 100)}%`}
+                  />
+                  <div className="flex items-end gap-2">
+                    <div className="flex-1">
+                      <Slider label="Scale" value={activeLayer.transform.scale} min={0.1} max={3} step={0.1}
+                        onChange={(v) => updateLayerTransform(activeLayer.id, { scale: v })}
+                        valueDisplay={`${activeLayer.transform.scale.toFixed(1)}x`}
+                      />
+                    </div>
+                    <div className="flex gap-1 mb-1">
+                      <button onClick={() => handleFitToCanvas(false)} title="Fit to Canvas" className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[9px] uppercase hover:bg-zinc-800 text-zinc-400 hover:text-white">Fit</button>
+                      <button onClick={() => handleFitToCanvas(true)} title="Cover Canvas" className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[9px] uppercase hover:bg-zinc-800 text-zinc-400 hover:text-white">Cover</button>
+                    </div>
+                  </div>
+                  <Slider label="Rotation" value={activeLayer.transform.rotation} min={0} max={360} step={1}
+                    onChange={(v) => updateLayerTransform(activeLayer.id, { rotation: v })}
+                    valueDisplay={`${activeLayer.transform.rotation}°`}
+                  />
+                  <div>
+                    <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Blend Mode</label>
+                    <select
+                      value={activeLayer.transform.blendMode}
+                      onChange={(e) => updateLayerTransform(activeLayer.id, { blendMode: e.target.value as any })}
+                      className="w-full bg-black border border-zinc-900 rounded px-2 py-1 text-[10px] text-white"
+                    >
+                      <option value="normal">Normal</option>
+                      <option value="multiply">Multiply</option>
+                      <option value="screen">Screen</option>
+                      <option value="overlay">Overlay</option>
+                      <option value="darken">Darken</option>
+                      <option value="lighten">Lighten</option>
+                      <option value="difference">Difference</option>
+                      <option value="exclusion">Exclusion</option>
+                    </select>
+
+                    <div className="mt-2">
+                      <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Animation LUT</label>
+                      <select
+                        value={activeLayer.transform.lut || 'none'}
+                        onChange={(e) => updateLayerTransform(activeLayer.id, { lut: e.target.value as any })}
+                        className="w-full bg-black border border-zinc-900 rounded px-2 py-1 text-[10px] text-white"
+                      >
+                        <option value="none">None</option>
+                        <option value="spectrum">Spectrum (RGB Cycle)</option>
+                        <option value="pulse">Pulse (Brightness)</option>
+                        <option value="flicker">Flicker (Opacity)</option>
+                        <option value="glitch">Glitch (Red/Blue)</option>
+                        <option value="thermal">Thermal (Invert+Hue)</option>
+                        <option value="noir">Noir (Grayscale)</option>
+                        <option value="cyber">Cyber (Neon Glow)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        onClick={() => updateLayerTransform(activeLayer.id, { flipX: !activeLayer.transform.flipX })}
+                        className={`flex-1 py-1.5 text-[9px] uppercase font-bold rounded border ${activeLayer.transform.flipX ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
+                      >
+                        Flip H
+                      </button>
+                      <button
+                        onClick={() => updateLayerTransform(activeLayer.id, { flipY: !activeLayer.transform.flipY })}
+                        className={`flex-1 py-1.5 text-[9px] uppercase font-bold rounded border ${activeLayer.transform.flipY ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
+                      >
+                        Flip V
+                      </button>
+                    </div>
+
+                    {/* AUDIO BINDING UI - MOVED OUT */}
+                  </div>
+                </div>
+              </Card>
+
+              {/* AUDIO CONTROL */}
+              <Card className="space-y-4 card-hover-animation">
+                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Audio Source</h3>
+                <AudioControlPanel analyzer={audioAnalyzer} />
+
+                {/* Audio React Bindings - kept here or in transform? User put Audio before Effects, so maybe Audio Control + Reactivity belong here? */}
+                {/* Actually, user said "Transform, Audio, Effects". Binding is usually part of transform, but let's duplicate or move the binding UI here? */}
+                {/* No, the binding UI needs to be with the properties it controls OR standalone. */}
+                {/* The previous UI had binding IN Transform. I'll keep binding in Transform but move the Audio *Source* card to after Transform. */}
+
+                {/* Re-adding Audio Bindings here for clarity if requested? No, user just said "Audio" card. */}
+                {/* But wait, "Link Audio Data" is effectively configuring the layer's reactivity. */}
+                {/* I will keep the binding controls inside the Transform card (as they relate to scale/opacity) but ensure the Layer Reactivity Toggle is prominent. */}
+
+                {/* Let's actually put the Audio REACTIVITY settings (Source selection, Strength, Target) here in the AUDIO card? */}
+                {/* That makes a lot of sense. The "Audio" card handles Source (Mic) AND Reactivity Config. */}
+                {/* Moving the Audio Reactivity UI from Transform to here. */}
+
+                <div className="mt-4 pt-4 border-t border-zinc-900/50">
+                  <div className="flex justify-between items-center mb-3">
+                    <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Audio Reactivity</label>
+                    <input
+                      type="checkbox"
+                      checked={activeLayer.transform.audioReact?.enabled ?? false}
+                      onChange={(e) => updateLayerTransform(activeLayer.id, {
+                        audioReact: { ...activeLayer.transform.audioReact!, enabled: e.target.checked }
+                      } as any)}
+                      className="w-3 h-3 accent-green-500 cursor-pointer"
+                    />
+                  </div>
+
+                  {activeLayer.transform.audioReact?.enabled && (
+                    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                      <div className="grid grid-cols-2 gap-2">
+                        <div>
+                          <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Source</label>
+                          <select
+                            value={activeLayer.transform.audioReact.source}
+                            onChange={(e) => updateLayerTransform(activeLayer.id, {
+                              audioReact: { ...activeLayer.transform.audioReact!, source: e.target.value as any }
+                            } as any)}
+                            className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
+                          >
+                            <option value="bass">Bass</option>
+                            <option value="mid">Mid</option>
+                            <option value="treble">Treble</option>
+                            <option value="volume">Volume</option>
+                          </select>
+                        </div>
+                        <div>
+                          <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Target</label>
+                          <select
+                            value={activeLayer.transform.audioReact.target}
+                            onChange={(e) => updateLayerTransform(activeLayer.id, {
+                              audioReact: { ...activeLayer.transform.audioReact!, target: e.target.value as any }
+                            } as any)}
+                            className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
+                          >
+                            <option value="scale">Scale</option>
+                            <option value="opacity">Opacity</option>
+                            <option value="rotation">Rotation</option>
+                            <option value="distortion">Distortion (Glitch)</option>
+                            <option value="hue">Hue Shift</option>
+                            <option value="rgb-split">RGB Split (Chromatic)</option>
+                          </select>
+                        </div>
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex justify-between text-[9px]">
+                          <span className="text-zinc-600 uppercase">Strength</span>
+                          <span className="text-zinc-400">{(activeLayer.transform.audioReact.strength * 100).toFixed(0)}%</span>
+                        </div>
+                        <input
+                          type="range"
+                          min="0"
+                          max="2"
+                          step="0.05"
+                          value={activeLayer.transform.audioReact.strength}
+                          onChange={(e) => updateLayerTransform(activeLayer.id, {
+                            audioReact: { ...activeLayer.transform.audioReact!, strength: parseFloat(e.target.value) }
+                          } as any)}
+                          className="w-full h-1 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-green-500"
+                        />
+                      </div>
+
+                      <button
+                        onClick={() => updateLayerTransform(activeLayer.id, {
+                          audioReact: { ...activeLayer.transform.audioReact!, invert: !activeLayer.transform.audioReact?.invert }
+                        } as any)}
+                        className={`w-full py-1 text-[8px] uppercase font-bold rounded border ${activeLayer.transform.audioReact.invert ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-600'}`}
+                      >
+                        Invert Signal
+                      </button>
+                    </div>
+                  )}
+                </div>
+              </Card>
+
               {/* SECTION 4: EFFECTS */}
               <Card className="p-0 overflow-hidden card-hover-animation">
                 <button onClick={() => setShowEffects(!showEffects)}
@@ -871,30 +1002,12 @@ function PlaygroundContent() {
                 )}
               </Card>
             </div>
-
-            {/* STICKY GENERATE ACTION */}
-            <div className="pt-4 border-t border-zinc-900 bg-black/50 backdrop-blur-md space-y-3">
-              {loading && (
-                <div className="space-y-1 px-1">
-                  <div className="h-1 bg-zinc-900 rounded-full overflow-hidden">
-                    <div className="h-full bg-green-500 transition-all duration-300 rounded-full" style={{ width: `${progress}%` }} />
-                  </div>
-                  <div className="flex justify-between items-center text-[9px] font-mono text-zinc-600">
-                    <span>PROCESSING PIPELINE</span>
-                    <span>{Math.round(progress)}%</span>
-                  </div>
-                </div>
-              )}
-              <Button onClick={generate} disabled={!activeLayer.file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)]" isLoading={loading} variant="primary">
-                {loading ? 'PROCESSING...' : 'UPDATE LAYER'}
-              </Button>
-            </div>
           </div>
 
           {/* ─── Preview Panel ─── */}
           <div className="lg:col-span-8 flex flex-col gap-4">
             <Card className="relative flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[500px] card-hover-animation" ref={compositionRef}>
-              <div className="relative flex-1 bg-[#111] overflow-hidden">
+              <div ref={canvasRef} className="relative flex-1 bg-[#111] overflow-hidden">
                 {/* Composition Canvas */}
                 <CompositionCanvas
                   layers={layers}
@@ -908,17 +1021,40 @@ function PlaygroundContent() {
               </div>
 
               {/* Title Bar */}
-              <div className="absolute top-0 left-0 right-0 flex justify-between items-center px-4 py-2.5 bg-zinc-900/80 backdrop-blur border-b border-zinc-800 z-50">
+              <div className="absolute top-0 left-0 right-0 flex justify-between items-center px-4 py-2.5 bg-zinc-900/80 backdrop-blur border-b border-zinc-800 z-50 transition-opacity duration-300">
                 <div className="flex gap-1.5">
                   <div className="w-2.5 h-2.5 rounded-full bg-red-500/40" />
                   <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/40" />
                   <div className="w-2.5 h-2.5 rounded-full bg-green-500/40" />
                 </div>
-                <div className="text-[10px] text-zinc-600 font-mono uppercase tracking-widest">
-                  COMPOSITION PREVIEW
+                <div className="flex items-center gap-4">
+                  {/* Recording Indicator */}
+                  {isRecording && (
+                    <div className="flex items-center gap-2 text-red-500 animate-pulse">
+                      <div className="w-2 h-2 rounded-full bg-red-500" />
+                      <span className="text-[10px] uppercase font-bold tracking-widest">
+                        REC {Math.floor(recordingTime / 60)}:{String(recordingTime % 60).padStart(2, '0')}
+                      </span>
+                    </div>
+                  )}
+                  <div className="text-[10px] text-zinc-600 font-mono uppercase tracking-widest">
+                    COMPOSITION PREVIEW
+                  </div>
                 </div>
-                <div className="flex gap-2 items-center">
-                  <Button size="sm" variant="ghost" onClick={() => setIsPlaying(!isPlaying)} className="h-6 w-6 p-0 text-zinc-500 hover:text-white" title={isPlaying ? "Pause Animation" : "Play Animation"}>
+                <div className="flex items-center gap-2">
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    className={`h-6 w-6 p-0 hover:bg-zinc-800 ${isRecording ? 'text-red-500 bg-red-500/10 hover:bg-red-500/20' : 'text-zinc-400'}`}
+                    onClick={isRecording ? stopRecording : startRecording}
+                    title={isRecording ? "Stop Recording" : "Record Screen (Video)"}
+                  >
+                    <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-current' : 'border-2 border-current'}`} />
+                  </Button>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setIsPlaying(!isPlaying)} className="h-6 w-6 p-0 text-zinc-500 hover:text-white" title={isPlaying ? "Pause Animation" : "Play Animation"}>
                     {isPlaying ? (
                       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
                     ) : (
@@ -944,12 +1080,9 @@ function PlaygroundContent() {
 
             </Card>
 
-            <div className="text-zinc-500 text-xs font-mono text-center">
-              Drag layers to position • Select layer to edit properties
-            </div>
           </div>
-        </div >
-      </main >
+        </div>
+      </main>
 
       {/* Save Modal */}
       {
@@ -974,6 +1107,6 @@ function PlaygroundContent() {
           </div>
         )
       }
-    </div>
+    </div >
   );
 }

@@ -47,6 +47,9 @@ export const AsciiAnimation: React.FC<AsciiAnimationProps> = ({
         ...style
     };
 
+    // Check if frame contains HTML (e.g. for color support)
+    const isHtml = typeof currentFrame === 'string' && (currentFrame.includes('<span') || currentFrame.includes('<div'));
+
     return (
         <pre
             className={className}
@@ -54,8 +57,7 @@ export const AsciiAnimation: React.FC<AsciiAnimationProps> = ({
             onClick={toggle}
             role="img"
             aria-label="ASCII Animation"
-        >
-            {currentFrame}
-        </pre>
+            {...(isHtml ? { dangerouslySetInnerHTML: { __html: currentFrame } } : { children: currentFrame })}
+        />
     );
 };
