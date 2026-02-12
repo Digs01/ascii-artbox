@@ -1,4 +1,3 @@
-
 'use client';
 
 import { useState, useRef, useCallback, useEffect } from 'react';
@@ -8,10 +7,13 @@ import { Button } from '../../components/ui/Button';
 import { Slider } from '../../components/ui/Slider';
 import { Nav } from '../../components/ui/Nav';
 import { ToastProvider, useToast } from '../../components/ui/ToastContext';
-import { useHistory } from '../../hooks/useHistory';
-import { GistManager } from '../../components/playground/GistManager';
-import { ShareCard } from '../../components/playground/ShareCard';
+import { useLayers } from '../../hooks/useLayers';
+import { LayerManager } from '../../components/playground/LayerManager';
+import { CompositionCanvas } from '../../components/playground/CompositionCanvas';
 import html2canvas from 'html2canvas';
+import { Layer, LayerOptions } from '../../types/layer';
+import { useAudioAnalyzer, AudioMetrics } from '../../hooks/useAudioAnalyzer';
+import { AudioControlPanel } from '../../components/playground/AudioControlPanel';
 
 const DEFAULT_CHARSET = " .:-=+*#%@";
 const DENSE_CHARSET = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
@@ -35,33 +37,6 @@ const BG_THEMES = [
   { label: 'Navy', bg: '#0a0a1a', border: 'border-blue-900/30' },
 ];
 
-
-
-const DEFAULT_OPTIONS = {
-  width: 100,
-  inverted: false,
-  videoFps: 12,
-  charset: DEFAULT_CHARSET,
-  color: '#ffffff',
-  customColor: '#ffffff',
-  fontSize: 8,
-  bgTheme: BG_THEMES[0],
-  removeBackground: false,
-  transparentColor: '#000000',
-  colorTolerance: 30,
-  colorMode: false,
-  renderMode: 'standard' as 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette',
-  posterize: 0,
-  clahe: false,
-  frameDiff: false,
-  dither: false,
-  palette: undefined as string | undefined,
-  sharpen: false,
-  blur: 0,
-  noise: 0,
-  overlayText: '',
-};
-
 export default function Playground() {
   return (
     <ToastProvider>
@@ -72,73 +47,151 @@ export default function Playground() {
 
 function PlaygroundContent() {
   const { toast } = useToast();
-  const [file, setFile] = useState<File | null>(null);
-  const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const [frames, setFrames] = useState<string[]>([]);
-  const [fps, setFps] = useState(12);
+
+  // Layer State Hook
+  const {
+    layers,
+    activeLayer,
+    activeLayerId,
+    setActiveLayerId,
+    addLayer,
+    updateLayer,
+    updateLayerOptions,
+    updateLayerTransform,
+    removeLayer,
+    duplicateLayer,
+    reorderLayers,
+    setLayerAscii
+  } = useLayers();
+
+  // Animation State
+  const [isPlaying, setIsPlaying] = useState(true);
+  const [globalFrameCount, setGlobalFrameCount] = useState(0);
+  const animationRef = useRef<number>();
+  // Audio State
+  const audioAnalyzer = useAudioAnalyzer();
+
+  // Animation Loop (approx 12fps global or higher?)
+  // Let's run at 12fps for retro feel, or 30/60 for smoothness but update frame index based on time?
+  // Simple interval for now: 12fps default.
+  // UPDATE: We need to pull audio metrics more often for smooth UI updates (60fps) but keep ASCII frames at 12fps?
+  // Actually, standard ASCII animations look best at lower frame rates, but audio reactivity should be smooth.
+  // We can use a ref for audio metrics to pass down without re-rendering the whole page component?
+  // CompositionCanvas uses props. If we pass metrics as prop, it re-renders.
+  // Since we are in React, let's try passing metrics as state for now, updated in a loop.
+  const [audioMetrics, setAudioMetrics] = useState<AudioMetrics | undefined>(undefined);
+
+  useEffect(() => {
+    if (!isPlaying) return;
+
+    let lastTime = performance.now();
+    let frameAccumulator = 0;
+    const asciiFps = 12;
+    const interval = 1000 / asciiFps;
+
+    const loop = () => {
+      const now = performance.now();
+      const delta = now - lastTime;
+
+      // Update ASCII Frame Count
+      if (delta >= interval) {
+        setGlobalFrameCount(c => c + 1);
+        lastTime = now;
+      }
+
+      // Update Audio Metrics (High FPS)
+      if (audioAnalyzer.isListening) {
+        // We set state here, triggering re-render of page -> canvas.
+        // This might be heavy. Let's see. 
+        setAudioMetrics(audioAnalyzer.getAudioMetrics());
+      }
+
+      animationRef.current = requestAnimationFrame(loop);
+    };
+
+    animationRef.current = requestAnimationFrame(loop);
+    return () => cancelAnimationFrame(animationRef.current!);
+  }, [isPlaying, audioAnalyzer.isListening]); // Re-bind if listening changes to ensure loop catches it
+
+  // Initialize with one layer if empty
+  useEffect(() => {
+    if (layers.length === 0) {
+      addLayer(null);
+    }
+  }, [layers.length, addLayer]);
+
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
-  const { state: options, set: setOptions, undo, redo, canUndo, canRedo, reset, historyState } = useHistory(DEFAULT_OPTIONS);
-
-  // Destructure for easier access
-  const {
-    width, inverted, videoFps, charset, color, customColor, fontSize, bgTheme,
-    removeBackground, transparentColor, colorTolerance, colorMode, renderMode,
-    posterize, clahe, frameDiff, dither, palette, sharpen, blur, noise, overlayText
-  } = options;
 
   const [showEffects, setShowEffects] = useState(false);
-
-  const [isDragging, setIsDragging] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [currentFrame, setCurrentFrame] = useState(0);
+  const [isDraggingFile, setIsDraggingFile] = useState(false);
 
   // Save Modal State
   const [showSaveModal, setShowSaveModal] = useState(false);
   const [saveName, setSaveName] = useState('');
 
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  // Access options from active layer or default to empty object to prevent crashes
+  // We use a helper to get safe options
+  const options = activeLayer?.options || {} as any; // Safe fallback?
 
-  // Playback control
-  useEffect(() => {
-    if (frames.length <= 1) return;
-    if (isPlaying) {
-      intervalRef.current = setInterval(() => {
-        setCurrentFrame(f => (f + 1) % frames.length);
-      }, 1000 / fps);
+  // Helper to safely update options
+  const setOptions = (updater: (prev: LayerOptions) => LayerOptions) => {
+    if (!activeLayerId || !activeLayer) return;
+    const newOptions = updater(activeLayer.options);
+    updateLayerOptions(activeLayerId, newOptions);
+  };
+
+  // Helper destructuring for active layer options
+  const {
+    width, inverted, videoFps, charset, color, customColor, fontSize, bgTheme,
+    removeBackground, transparentColor, colorTolerance, colorMode, renderMode,
+    posterize, clahe, frameDiff, dither, palette, sharpen, blur, noise, overlayText, depthMode
+  } = options as LayerOptions || {}; // Fallback to empty
+
+  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDraggingFile(true); };
+  const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDraggingFile(false); };
+
+  const handleDrop = (e: React.DragEvent) => {
+    e.preventDefault();
+    setIsDraggingFile(false);
+    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
+      const f = e.dataTransfer.files[0];
+      // Add as new layer or update current?
+      // UX Decision: If current layer is empty (no file), update it. Else add new.
+      if (activeLayer && !activeLayer.file) {
+        updateLayer(activeLayer.id, {
+          file: f,
+          name: f.name,
+          previewUrl: URL.createObjectURL(f),
+          type: f.type.startsWith('video/') ? 'video' : 'image'
+        });
+      } else {
+        addLayer(f);
+      }
     }
-    return () => {
-      if (intervalRef.current) clearInterval(intervalRef.current);
-    };
-  }, [isPlaying, fps, frames.length]);
+  };
 
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const f = e.target.files[0];
-      setFile(f);
-      setFrames([]);
-      setPreviewUrl(URL.createObjectURL(f));
+      if (activeLayer) {
+        // Update current layer
+        updateLayer(activeLayer.id, {
+          file: f,
+          name: f.name,
+          previewUrl: URL.createObjectURL(f),
+          type: f.type.startsWith('video/') ? 'video' : 'image',
+          frames: [] // Reset frames
+        });
+      } else {
+        addLayer(f);
+      }
     }
   };
-
-  const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(true); };
-  const handleDragLeave = (e: React.DragEvent) => { e.preventDefault(); setIsDragging(false); };
-  const handleDrop = (e: React.DragEvent) => {
-    e.preventDefault();
-    setIsDragging(false);
-    if (e.dataTransfer.files && e.dataTransfer.files[0]) {
-      const f = e.dataTransfer.files[0];
-      setFile(f);
-      setFrames([]);
-      setPreviewUrl(URL.createObjectURL(f));
-    }
-  };
-
-
 
   const generate = async () => {
-    if (!file) return;
+    if (!activeLayer || !activeLayer.file) return;
+
     setLoading(true);
     setProgress(0);
 
@@ -148,7 +201,7 @@ function PlaygroundContent() {
     }, 300);
 
     const formData = new FormData();
-    formData.append('file', file);
+    formData.append('file', activeLayer.file);
     formData.append('width', width.toString());
     formData.append('inverted', inverted.toString());
     formData.append('charset', charset);
@@ -193,8 +246,8 @@ function PlaygroundContent() {
     }
 
     // Check for video or gif
-    const isGif = file.type === 'image/gif' || file.name.toLowerCase().endsWith('.gif');
-    const isVideo = file.type.startsWith('video/') || isGif;
+    const isGif = activeLayer.file.type === 'image/gif' || activeLayer.file.name.toLowerCase().endsWith('.gif');
+    const isVideo = activeLayer.file.type.startsWith('video/') || isGif;
     if (isVideo) {
       formData.append('fps', videoFps.toString());
       if (frameDiff) formData.append('frameDiff', 'true');
@@ -208,15 +261,20 @@ function PlaygroundContent() {
 
       clearInterval(progressInterval);
       setProgress(100);
+
+      let newFrames: string[] = [];
+      let newFps = activeLayer.fps;
+
       if (data.frames) {
-        setFrames(data.frames);
-        if (data.fps) setFps(data.fps);
+        newFrames = data.frames;
+        if (data.fps) newFps = data.fps;
       } else if (data.ascii) {
-        setFrames([data.ascii]);
+        newFrames = [data.ascii];
       }
-      setCurrentFrame(0);
+
+      setLayerAscii(activeLayer.id, newFrames, newFps);
+
     } catch (err: any) {
-      console.error(err);
       console.error(err);
       toast(err.message || 'Failed to generate ASCII', 'error');
     } finally {
@@ -225,28 +283,75 @@ function PlaygroundContent() {
     }
   };
 
-  const downloadMp4 = async () => {
+  const downloadMp4 = async (activeLayerOnly = false) => {
     try {
-      if (frames.length === 0) return;
+      if (activeLayerOnly) {
+        if (!activeLayer || activeLayer.frames.length === 0) return;
+        const isGif = activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif');
+        const isVideo = activeLayer.file?.type.startsWith('video/') || isGif;
 
-      // Calculate effective width/height roughly if needed or let server handle
-      // But we have fontSize and font metrics.
-      // Server renderer uses similar logic.
+        toast('Preparing MP4 for active layer...', 'info');
 
-      const isGif = file?.type === 'image/gif' || file?.name.toLowerCase().endsWith('.gif');
-      const isVideo = file?.type.startsWith('video/') || isGif;
+        const response = await fetch('/api/ascii/download-mp4', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            frames: activeLayer.frames,
+            fps: isVideo ? videoFps : (activeLayer.frames.length > 1 ? 5 : 1),
+            fontSize,
+            lineHeight: fontSize + 2,
+            color,
+            backgroundColor: bgTheme.bg === 'transparent' ? '#000000' : bgTheme.bg
+          })
+        });
+        if (!response.ok) throw new Error((await response.json()).error);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const a = document.createElement('a'); a.href = url; a.download = `ascii-${activeLayer.name}.mp4`; a.click();
+        return;
+      }
+
+      // Composite Export
+      toast('Rendering composite video... This may take a moment.', 'info');
+
+      const payload = {
+        layers: layers.map(l => ({
+          id: l.id,
+          frames: l.frames,
+          fps: l.fps,
+          // We pass rendered options or just styling options? 
+          // Renderer needs options to render text to buffer.
+          options: {
+            fontSize: l.options.fontSize,
+            color: l.options.colorMode ? 'white' : l.options.color, // if colorMode, html usually handles it, but renderer uses sharp/svg.
+            // Wait, if colorMode is true, we have HTML spans. `renderAsciiFrameToBuffer` in renderer.ts needs to handle HTML parsing?
+            // `renderer.ts` uses `text.split` and `tspan`. It does simple rendering.
+            // It does NOT support full HTML coloring yet in `renderAsciiFrameToBuffer`.
+            // It treats text as plain text in the SVG generally unless we improved it?
+            // The current `renderer.ts` escapes XML. It does not parse spans.
+            // WE NEED TO FIX RENDERER FOR COLOR MODE OR DISABLE IT FOR VIDEO?
+            // For now, let's assume plain text or implement simple parsing if needed.
+            // If the user wants color, they need basic color.
+            backgroundColor: 'transparent', // Always transparent for compositing
+            fontFamily: 'monospace',
+            lineHeight: l.options.fontSize, // tight
+            width: l.options.width * l.options.fontSize * 0.6 // approx? No let renderer auto-calc from content
+          },
+          transform: l.transform
+        })),
+        options: {
+          width: 800, // TODO: Make dynamic based on canvas size
+          height: 600,
+          backgroundColor: '#000000', // Canvas background
+          fps: 12, // Global FPS
+          duration: 5 // Default 5s or calculcated
+        }
+      };
 
       const response = await fetch('/api/ascii/download-mp4', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          frames,
-          fps: isVideo ? videoFps : (frames.length > 1 ? 5 : 1), // Default 5 fps for non-video animations?
-          fontSize,
-          lineHeight: fontSize + 2,
-          color,
-          backgroundColor: bgTheme.bg === 'transparent' ? '#000000' : bgTheme.bg // Default to black if transparent for video
-        })
+        body: JSON.stringify(payload)
       });
 
       if (!response.ok) {
@@ -258,30 +363,62 @@ function PlaygroundContent() {
       const url = window.URL.createObjectURL(blob);
       const a = document.createElement('a');
       a.href = url;
-      a.download = `ascii-animation-${Date.now()}.mp4`;
+      a.download = `ascii-composite-${Date.now()}.mp4`;
       document.body.appendChild(a);
       a.click();
       window.URL.revokeObjectURL(url);
       document.body.removeChild(a);
+      toast('Composite MP4 downloaded!', 'success');
     } catch (e: any) {
       toast('Failed to download MP4: ' + e.message, 'error');
     }
   };
 
+  const copyToClipboard = () => {
+    if (!activeLayer || activeLayer.frames.length === 0) return;
+    const text = activeLayer.frames.join('\n\n--- FRAME BREAK ---\n\n');
+    navigator.clipboard.writeText(text);
+    toast('Active layer copied to clipboard!', 'success');
+  };
+
+  const downloadTxt = () => {
+    if (!activeLayer || activeLayer.frames.length === 0) return;
+    const text = activeLayer.frames.join('\n\n--- FRAME BREAK ---\n\n');
+    const blob = new Blob([text], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `ascii-${activeLayer.name}-${Date.now()}.txt`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
+  const downloadHtml = () => {
+    if (!activeLayer || activeLayer.frames.length === 0) return;
+    const content = `<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<style>body{background:${bgTheme.bg};color:${color};font-family:monospace;line-height:${fontSize}px;font-size:${fontSize}px;white-space:pre;}#art{display:inline-block;}</style>
+</head><body><div id="art">${activeLayer.frames[0]}</div>
+<script>const frames=${JSON.stringify(activeLayer.frames)};let f=0;const art=document.getElementById('art');if(frames.length>1){setInterval(()=>{f=(f+1)%frames.length;art.textContent=frames[f];},${1000 / (activeLayer.fps || 12)});}</script>
+</body></html>`;
+    const blob = new Blob([content], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a');
+    a.href = url; a.download = `ascii-${activeLayer.name}-${Date.now()}.html`; a.click();
+    URL.revokeObjectURL(url);
+  };
+
   const handleSaveToLibrary = async (name: string) => {
     try {
-      const isGif = file?.type === 'image/gif' || file?.name.toLowerCase().endsWith('.gif');
-      const isVideo = file?.type.startsWith('video/') || isGif;
+      if (!activeLayer || activeLayer.frames.length === 0) return;
+      const isGif = activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif');
+      const isVideo = activeLayer.file?.type.startsWith('video/') || isGif;
 
       const res = await fetch('/api/gallery/save', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
-          frames,
-          fps: isVideo ? videoFps : 1, // Default fps for images? Wait, images are 1 frame.
-          // For single images fps doesn't matter much.
-          // Let's check `frames`.
+          frames: activeLayer.frames,
+          fps: isVideo ? videoFps : 1,
         })
       });
       const data = await res.json();
@@ -293,78 +430,20 @@ function PlaygroundContent() {
     }
   };
 
-  const copyToClipboard = () => {
-    const text = frames.join('\n\n--- FRAME BREAK ---\n\n');
-    navigator.clipboard.writeText(text);
-    toast('Copied to clipboard!', 'success');
-  };
-
-  const downloadTxt = () => {
-    const text = frames.join('\n\n--- FRAME BREAK ---\n\n');
-    const blob = new Blob([text], { type: 'text/plain' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `ascii-${Date.now()}.txt`; a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  const downloadHtml = () => {
-    const content = `<!DOCTYPE html>
-<html><head><meta charset="utf-8">
-<style>body{background:${bgTheme.bg};color:${color};font-family:monospace;line-height:${fontSize}px;font-size:${fontSize}px;white-space:pre;}#art{display:inline-block;}</style>
-</head><body><div id="art">${frames[0]}</div>
-<script>const frames=${JSON.stringify(frames)};let f=0;const art=document.getElementById('art');if(frames.length>1){setInterval(()=>{f=(f+1)%frames.length;art.textContent=frames[f];},${1000 / fps});}</script>
-</body></html>`;
-    const blob = new Blob([content], { type: 'text/html' });
-    const url = URL.createObjectURL(blob);
-    const a = document.createElement('a');
-    a.href = url; a.download = `ascii-${Date.now()}.html`; a.click();
-    URL.revokeObjectURL(url);
-  };
-
-  // Export to PNG
-  const downloadPng = () => {
-    const canvas = document.createElement('canvas');
-    const ctx = canvas.getContext('2d')!;
-    const frame = frames[currentFrame] || frames[0];
-    const lines = frame.split('\n');
-    const charW = fontSize * 0.6;
-    const charH = fontSize;
-    const maxCols = Math.max(...lines.map(l => l.length));
-
-    canvas.width = Math.ceil(maxCols * charW) + 20;
-    canvas.height = lines.length * charH + 20;
-
-    ctx.fillStyle = bgTheme.bg;
-    ctx.fillRect(0, 0, canvas.width, canvas.height);
-    ctx.fillStyle = color;
-    ctx.font = `${fontSize}px monospace`;
-    ctx.textBaseline = 'top';
-
-    lines.forEach((line, i) => {
-      ctx.fillText(line, 10, 10 + i * charH);
-    });
-
-    canvas.toBlob((blob) => {
-      if (!blob) return;
-      const url = URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url; a.download = `ascii-${Date.now()}.png`; a.click();
-      URL.revokeObjectURL(url);
-    }, 'image/png');
-  };
-
   // Export Share Card
   const shareCardRef = useRef<HTMLDivElement>(null);
-  const downloadShareCard = async () => {
-    if (!shareCardRef.current) return;
+  // We need to capture the CompositionCanvas specifically
+  // But html2canvas might have trouble with some CSS.
+  // Actually, we can just wrap the CompositionCanvas in a div and ref that.
 
+  const compositionRef = useRef<HTMLDivElement>(null);
+
+  const downloadShareCard = async () => {
+    if (!compositionRef.current) return;
     try {
-      toast('Generating social card...', 'info');
-      const canvas = await html2canvas(shareCardRef.current, {
-        scale: 2, // High res for retina
-        backgroundColor: null,
-        logging: false,
+      toast('Generating generic capture...', 'info');
+      const canvas = await html2canvas(compositionRef.current, {
+        background: undefined,
         useCORS: true
       });
 
@@ -372,17 +451,14 @@ function PlaygroundContent() {
         if (!blob) return;
         const url = URL.createObjectURL(blob);
         const a = document.createElement('a');
-        a.href = url; a.download = `ascii-card-${Date.now()}.png`; a.click();
+        a.href = url; a.download = `ascii-composite-${Date.now()}.png`; a.click();
         URL.revokeObjectURL(url);
-        toast('Social card downloaded!', 'success');
+        toast('Image downloaded!', 'success');
       });
-    } catch (e) {
-      console.error(e);
-      toast('Failed to generate card', 'error');
+    } catch (e: any) {
+      toast('Failed to capture: ' + e.message, 'error');
     }
   };
-
-
 
   // Keyboard Shortcuts
   useEffect(() => {
@@ -391,105 +467,252 @@ function PlaygroundContent() {
 
       const cmd = e.metaKey || e.ctrlKey;
 
-      if (cmd && e.key === 'z') {
-        e.preventDefault();
-        if (e.shiftKey) redo();
-        else undo();
-      }
-      else if (cmd && (e.key === 'y' && !e.shiftKey)) {
-        e.preventDefault();
-        redo();
-      }
-      else if (cmd && (e.key === 'Enter' || e.key === 'g')) {
+      if (cmd && (e.key === 'Enter' || e.key === 'g')) {
         e.preventDefault();
         generate();
-      }
-      else if (cmd && e.key === 's') {
-        e.preventDefault();
-        if (frames.length > 0) setShowSaveModal(true);
-      }
-      else if (e.key === ' ' && frames.length > 1) {
-        e.preventDefault();
-        setIsPlaying(p => !p);
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [undo, redo, frames.length, generate]);
+  }, [generate]);
 
-  const activeFrame = frames.length > 1 ? frames[currentFrame % frames.length] : frames[0];
+  if (!activeLayer) return <div className="min-h-screen bg-black text-white pt-24 text-center">Loading layers...</div>;
 
   return (
     <div className="min-h-screen bg-black text-white">
       <Nav />
+      {/* Composition wrapper for capturing */}
+
       <main className="pt-24 px-6 max-w-[1400px] mx-auto pb-20">
         <header className="mb-8">
           <h1 className="text-4xl font-bold tracking-tight mb-2">Workstation</h1>
-          <p className="text-zinc-500">Convert images and videos to ASCII art in real-time.</p>
+          <p className="text-zinc-500">Compositing Mode</p>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* ─── Controls Panel ─── */}
           <div className="lg:col-span-4 space-y-4 flex flex-col h-[calc(100vh-160px)] sticky top-24">
             <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
-              {/* History Controls */}
-              <div className="flex items-center justify-between bg-zinc-900/40 p-2 rounded-lg border border-zinc-800 backdrop-blur-sm sticky top-0 z-20">
-                <div className="flex gap-1">
-                  <button onClick={undo} disabled={!canUndo} title="Undo (Ctrl+Z)"
-                    className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" /></svg>
-                  </button>
-                  <button onClick={redo} disabled={!canRedo} title="Redo (Ctrl+Y)"
-                    className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-white disabled:opacity-30 disabled:hover:bg-transparent disabled:cursor-not-allowed transition-colors">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6" /><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3L21 13" /></svg>
-                  </button>
-                  <div className="w-px h-4 bg-zinc-800 mx-1 self-center" />
-                  <button onClick={() => setOptions(p => ({ ...p, width: 100, inverted: false, contrast: 1 }))} title="Reset Defaults"
-                    className="p-1.5 rounded hover:bg-zinc-800 text-zinc-400 hover:text-red-400 transition-colors">
-                    <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 12a9 9 0 1 0 9-9 9.75 9.75 0 0 0-6.74 2.74L3 12" /><path d="M3 3v9h9" /></svg>
-                  </button>
+
+              {/* LAYERS MANAGER */}
+              <LayerManager
+                layers={layers}
+                activeLayerId={activeLayerId}
+                onSelectLayer={setActiveLayerId}
+                onToggleVisibility={(id) => {
+                  const l = layers.find(x => x.id === id);
+                  if (l) updateLayer(id, { visible: !l.visible });
+                }}
+                onToggleLock={(id) => {
+                  const l = layers.find(x => x.id === id);
+                  if (l) updateLayer(id, { locked: !l.locked });
+                }}
+                onRemoveLayer={removeLayer}
+                onDuplicateLayer={duplicateLayer}
+                onReorderLayers={reorderLayers}
+                onAddLayer={() => addLayer(null)}
+              />
+
+              {/* AUDIO CONTROL */}
+              <AudioControlPanel analyzer={audioAnalyzer} />
+
+              {/* TRANSFORM CONTROL (New) */}
+              <Card className="space-y-4 card-hover-animation">
+                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Transform</h3>
+                <div className="grid grid-cols-2 gap-4">
+                  <Slider label="Opacity" value={activeLayer.transform.opacity} min={0} max={1} step={0.01}
+                    onChange={(v) => updateLayerTransform(activeLayer.id, { opacity: v })}
+                    valueDisplay={`${Math.round(activeLayer.transform.opacity * 100)}%`}
+                  />
+                  <Slider label="Scale" value={activeLayer.transform.scale} min={0.1} max={3} step={0.1}
+                    onChange={(v) => updateLayerTransform(activeLayer.id, { scale: v })}
+                    valueDisplay={`${activeLayer.transform.scale}x`}
+                  />
+                  <Slider label="Rotation" value={activeLayer.transform.rotation} min={-180} max={180} step={1}
+                    onChange={(v) => updateLayerTransform(activeLayer.id, { rotation: v })}
+                    valueDisplay={`${activeLayer.transform.rotation}°`}
+                  />
+                  <div>
+                    <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Blend Mode</label>
+                    <select
+                      value={activeLayer.transform.blendMode}
+                      onChange={(e) => updateLayerTransform(activeLayer.id, { blendMode: e.target.value as any })}
+                      className="w-full bg-black border border-zinc-900 rounded px-2 py-1 text-[10px] text-white"
+                    >
+                      <option value="normal">Normal</option>
+                      <option value="multiply">Multiply</option>
+                      <option value="screen">Screen</option>
+                      <option value="overlay">Overlay</option>
+                      <option value="darken">Darken</option>
+                      <option value="lighten">Lighten</option>
+                      <option value="difference">Difference</option>
+                      <option value="exclusion">Exclusion</option>
+                    </select>
+
+                    <div className="mt-2">
+                      <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Animation LUT</label>
+                      <select
+                        value={activeLayer.transform.lut || 'none'}
+                        onChange={(e) => updateLayerTransform(activeLayer.id, { lut: e.target.value as any })}
+                        className="w-full bg-black border border-zinc-900 rounded px-2 py-1 text-[10px] text-white"
+                      >
+                        <option value="none">None</option>
+                        <option value="spectrum">Spectrum (RGB Cycle)</option>
+                        <option value="pulse">Pulse (Brightness)</option>
+                        <option value="flicker">Flicker (Opacity)</option>
+                        <option value="glitch">Glitch (Red/Blue)</option>
+                        <option value="thermal">Thermal (Invert+Hue)</option>
+                        <option value="noir">Noir (Grayscale)</option>
+                        <option value="cyber">Cyber (Neon Glow)</option>
+                      </select>
+                    </div>
+
+                    <div className="flex gap-2 mt-2">
+                      <button
+                        onClick={() => updateLayerTransform(activeLayer.id, { flipX: !activeLayer.transform.flipX })}
+                        className={`flex-1 py-1.5 text-[9px] uppercase font-bold rounded border ${activeLayer.transform.flipX ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
+                      >
+                        Flip H
+                      </button>
+                      <button
+                        onClick={() => updateLayerTransform(activeLayer.id, { flipY: !activeLayer.transform.flipY })}
+                        className={`flex-1 py-1.5 text-[9px] uppercase font-bold rounded border ${activeLayer.transform.flipY ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
+                      >
+                        Flip V
+                      </button>
+                    </div>
+
+                    {/* AUDIO BINDING UI */}
+                    <div className="mt-4 pt-4 border-t border-zinc-900/50">
+                      <div className="flex justify-between items-center mb-3">
+                        <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Audio React</label>
+                        <input
+                          type="checkbox"
+                          checked={activeLayer.transform.audioReact?.enabled ?? false}
+                          onChange={(e) => updateLayerTransform(activeLayer.id, {
+                            audioReact: { ...activeLayer.transform.audioReact!, enabled: e.target.checked }
+                          } as any)}
+                          className="w-3 h-3 accent-green-500 cursor-pointer"
+                        />
+                      </div>
+
+                      {activeLayer.transform.audioReact?.enabled && (
+                        <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                          <div className="grid grid-cols-2 gap-2">
+                            <div>
+                              <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Source</label>
+                              <select
+                                value={activeLayer.transform.audioReact.source}
+                                onChange={(e) => updateLayerTransform(activeLayer.id, {
+                                  audioReact: { ...activeLayer.transform.audioReact!, source: e.target.value as any }
+                                } as any)}
+                                className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
+                              >
+                                <option value="bass">Bass</option>
+                                <option value="mid">Mid</option>
+                                <option value="treble">Treble</option>
+                                <option value="volume">Volume</option>
+                              </select>
+                            </div>
+                            <div>
+                              <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Target</label>
+                              <select
+                                value={activeLayer.transform.audioReact.target}
+                                onChange={(e) => updateLayerTransform(activeLayer.id, {
+                                  audioReact: { ...activeLayer.transform.audioReact!, target: e.target.value as any }
+                                } as any)}
+                                className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
+                              >
+                                <option value="scale">Scale</option>
+                                <option value="opacity">Opacity</option>
+                                <option value="rotation">Rotation</option>
+                                <option value="distortion">Distortion (Glitch)</option>
+                                <option value="hue">Hue Shift</option>
+                                <option value="rgb-split">RGB Split (Chromatic)</option>
+                              </select>
+                            </div>
+                          </div>
+
+                          <div className="space-y-1">
+                            <div className="flex justify-between text-[9px]">
+                              <span className="text-zinc-600 uppercase">Strength</span>
+                              <span className="text-zinc-400">{(activeLayer.transform.audioReact.strength * 100).toFixed(0)}%</span>
+                            </div>
+                            <input
+                              type="range"
+                              min="0"
+                              max="2"
+                              step="0.05"
+                              value={activeLayer.transform.audioReact.strength}
+                              onChange={(e) => updateLayerTransform(activeLayer.id, {
+                                audioReact: { ...activeLayer.transform.audioReact!, strength: parseFloat(e.target.value) }
+                              } as any)}
+                              className="w-full h-1 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-green-500"
+                            />
+                          </div>
+
+                          <button
+                            onClick={() => updateLayerTransform(activeLayer.id, {
+                              audioReact: { ...activeLayer.transform.audioReact!, invert: !activeLayer.transform.audioReact?.invert }
+                            } as any)}
+                            className={`w-full py-1 text-[8px] uppercase font-bold rounded border ${activeLayer.transform.audioReact.invert ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-600'}`}
+                          >
+                            Invert Signal
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
                 </div>
-                <div className="text-[9px] font-mono text-zinc-600">
-                  HISTORY
-                </div>
-              </div>
+              </Card>
+
+              {/* SECTION 1: Source */}
               <Card className="space-y-4 card-hover-animation">
                 <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">1. Source</h3>
-
+                  <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Source</h3>
+                  <span className="text-[9px] text-zinc-600">{activeLayer.name}</span>
                 </div>
 
                 <div
-                  className={`relative group transition-all duration-200 ${isDragging ? 'scale-[1.01]' : ''}`}
+                  className={`relative group transition-all duration-200 ${isDraggingFile ? 'scale-[1.01]' : ''}`}
                   onDragOver={handleDragOver}
                   onDragLeave={handleDragLeave}
                   onDrop={handleDrop}
                 >
                   <input type="file" accept="image/*,video/*" onChange={handleFileChange}
                     className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                  <div className={`border border-dashed rounded-lg p-5 text-center transition-all ${isDragging
+                  <div className={`border border-dashed rounded-lg p-5 text-center transition-all ${isDraggingFile
                     ? 'border-green-500 bg-green-500/5 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
                     : 'border-zinc-800 group-hover:border-zinc-700'}`}>
-                    {file ? (
+                    {activeLayer.file ? (
                       <div className="text-white text-xs font-mono truncate">
-                        {file.name}
-                        <span className="block text-[10px] text-zinc-600 mt-1">{(file.size / 1024).toFixed(1)} KB</span>
+                        {activeLayer.file.name}
+                        <span className="block text-[10px] text-zinc-600 mt-1">{(activeLayer.file.size / 1024).toFixed(1)} KB</span>
                       </div>
                     ) : (
-                      <div className={`text-xs ${isDragging ? 'text-green-400' : 'text-zinc-600'}`}>
-                        {isDragging ? 'DROP FILE' : 'DROP IMAGE/VIDEO'}
+                      <div className={`text-xs ${isDraggingFile ? 'text-green-400' : 'text-zinc-600'}`}>
+                        {isDraggingFile ? 'DROP FILE' : 'DROP IMAGE/VIDEO (Updates Active Layer)'}
                       </div>
                     )}
                   </div>
                 </div>
 
-
+                {/* Source Preview */}
+                {activeLayer.previewUrl && activeLayer.file && (
+                  <div className="mt-3 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950">
+                    {activeLayer.type === 'video' ? (
+                      <video src={activeLayer.previewUrl} className="w-full max-h-48 object-contain" autoPlay loop muted playsInline />
+                    ) : (
+                      <img src={activeLayer.previewUrl} alt="Source preview" className="w-full max-h-48 object-contain" />
+                    )}
+                  </div>
+                )}
               </Card>
 
               {/* SECTION 2: ENGINE */}
               <Card className="space-y-5 card-hover-animation">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">2. Engine</h3>
+                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Generative Engine</h3>
 
                 <div>
                   <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Render Algorithm</label>
@@ -514,23 +737,23 @@ function PlaygroundContent() {
                 </div>
 
                 <div className="space-y-4 pt-2 border-t border-zinc-900">
-                  <Slider label="Output Width" value={width} min={20} max={240} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} ch`} />
-                  {(file?.type.startsWith('video/') || file?.type === 'image/gif' || file?.name.toLowerCase().endsWith('.gif')) && (
-                    <Slider label="Motion FPS" value={videoFps} min={1} max={30} onChange={(v) => setOptions(p => ({ ...p, videoFps: v }))} valueDisplay={`${videoFps} FPS`} />
+                  <Slider label="Output Width" value={width || 100} min={20} max={240} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} ch`} />
+                  {(activeLayer.file?.type.startsWith('video/') || activeLayer.file?.name.toLowerCase().endsWith('.gif')) && (
+                    <Slider label="Motion FPS" value={videoFps || 12} min={1} max={30} onChange={(v) => setOptions(p => ({ ...p, videoFps: v }))} valueDisplay={`${videoFps} FPS`} />
                   )}
                 </div>
               </Card>
 
               {/* SECTION 3: STYLE */}
               <Card className="space-y-5 card-hover-animation">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">3. Style</h3>
+                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Style</h3>
 
                 {/* Palette & Color Group */}
                 <div className="space-y-4">
                   <div>
                     <div className="flex justify-between items-center mb-2">
                       <label className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">Color Theme</label>
-                      <input type="checkbox" checked={colorMode} onChange={(e) => setOptions(p => ({ ...p, colorMode: e.target.checked }))}
+                      <input type="checkbox" checked={colorMode || false} onChange={(e) => setOptions(p => ({ ...p, colorMode: e.target.checked }))}
                         className="rounded-sm bg-black border-zinc-700 text-green-500 focus:ring-0" />
                     </div>
 
@@ -565,7 +788,7 @@ function PlaygroundContent() {
                         />
                       ))}
                       <div className="relative">
-                        <input type="color" value={customColor}
+                        <input type="color" value={customColor || '#ffffff'}
                           onChange={(e) => setOptions(p => ({ ...p, customColor: e.target.value, color: e.target.value, palette: undefined }))}
                           className="absolute inset-0 w-5 h-5 opacity-0 cursor-pointer" />
                         <div className="w-5 h-5 rounded-sm border border-dashed border-zinc-700 flex items-center justify-center text-zinc-600 text-[10px] hover:border-zinc-500">
@@ -576,19 +799,11 @@ function PlaygroundContent() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-4 pt-2 border-t border-zinc-900">
-                    <Slider label="Font Size" value={fontSize} min={4} max={20} onChange={(v) => setOptions(p => ({ ...p, fontSize: v }))} valueDisplay={`${fontSize}px`} />
-                    <div>
-                      <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Terminal Background</label>
-                      <div className="flex gap-1">
-                        {BG_THEMES.map(t => (
-                          <button key={t.label} onClick={() => setOptions(p => ({ ...p, bgTheme: t }))}
-                            className={`flex-1 h-6 rounded-sm border transition-all ${bgTheme.label === t.label ? 'border-white ring-1 ring-white/20' : 'border-zinc-900'}`}
-                            style={{ background: t.bg }}
-                            title={t.label}
-                          />
-                        ))}
-                      </div>
-                    </div>
+                    <Slider label="Font Size" value={fontSize || 8} min={4} max={20} onChange={(v) => setOptions(p => ({ ...p, fontSize: v }))} valueDisplay={`${fontSize}px`} />
+                    {/* Background Theme is Global or Per Layer? Usually Global for canvas, but let's keep per layer or remove??
+                        Actually, composition has a background.
+                        Let's make this global for now or just affect the layer background style.
+                    */}
                   </div>
                 </div>
               </Card>
@@ -623,21 +838,21 @@ function PlaygroundContent() {
                         { label: 'Sharpen Detail', value: sharpen, key: 'sharpen' as const },
                         { label: 'Adaptive Contrast', value: clahe, key: 'clahe' as const },
                         { label: 'Luminance Dither', value: dither, key: 'dither' as const },
-                        { label: 'Isolate Motion', value: frameDiff, key: 'frameDiff' as const, hidden: !((file?.type.startsWith('video/') || file?.type === 'image/gif' || file?.name.toLowerCase().endsWith('.gif'))) },
+                        { label: 'Isolate Motion', value: frameDiff, key: 'frameDiff' as const, hidden: !((activeLayer.file?.type.startsWith('video/') || activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif'))) },
                         { label: 'Remove BG', value: removeBackground, key: 'removeBackground' as const },
                       ].map(f => !f.hidden && (
                         <div key={f.label} className="flex items-center justify-between">
                           <label className="text-[10px] text-zinc-500 uppercase tracking-tight">{f.label}</label>
-                          <input type="checkbox" checked={f.value} onChange={(e) => setOptions(p => ({ ...p, [f.key]: e.target.checked }))}
+                          <input type="checkbox" checked={!!f.value} onChange={(e) => setOptions(p => ({ ...p, [f.key]: e.target.checked }))}
                             className="rounded-sm bg-black border-zinc-800 text-green-500 focus:ring-0" />
                         </div>
                       ))}
                     </div>
 
                     <div className="space-y-4 border-t border-zinc-900 pt-5">
-                      <Slider label="Film Grain" value={noise} min={0} max={100} step={5} onChange={(v) => setOptions(p => ({ ...p, noise: v }))} valueDisplay={noise > 0 ? noise.toString() : 'Off'} />
-                      <Slider label="Blur Radius" value={blur} min={0} max={5} step={0.5} onChange={(v) => setOptions(p => ({ ...p, blur: v }))} valueDisplay={blur > 0 ? blur.toFixed(1) : 'Off'} />
-                      <Slider label="Posterize" value={posterize} min={0} max={8} step={1} onChange={(v) => setOptions(p => ({ ...p, posterize: v }))} valueDisplay={posterize < 2 ? 'Off' : `${posterize} levels`} />
+                      <Slider label="Film Grain" value={noise || 0} min={0} max={100} step={5} onChange={(v) => setOptions(p => ({ ...p, noise: v }))} valueDisplay={noise > 0 ? noise.toString() : 'Off'} />
+                      <Slider label="Blur Radius" value={blur || 0} min={0} max={5} step={0.5} onChange={(v) => setOptions(p => ({ ...p, blur: v }))} valueDisplay={blur > 0 ? blur.toFixed(1) : 'Off'} />
+                      <Slider label="Posterize" value={posterize || 0} min={0} max={8} step={1} onChange={(v) => setOptions(p => ({ ...p, posterize: v }))} valueDisplay={posterize < 2 ? 'Off' : `${posterize} levels`} />
                     </div>
 
                     {removeBackground && (
@@ -647,18 +862,11 @@ function PlaygroundContent() {
                           <input type="color" value={transparentColor} onChange={(e) => setOptions(p => ({ ...p, transparentColor: e.target.value }))}
                             className="w-8 h-8 bg-zinc-900 border border-zinc-700 rounded-lg cursor-pointer" />
                           <div className="flex-1">
-                            <Slider label="Sensitivity" value={colorTolerance} min={1} max={200} onChange={(v) => setOptions(p => ({ ...p, colorTolerance: v }))} valueDisplay={colorTolerance.toString()} />
+                            <Slider label="Sensitivity" value={colorTolerance || 30} min={1} max={200} onChange={(v) => setOptions(p => ({ ...p, colorTolerance: v }))} valueDisplay={colorTolerance.toString()} />
                           </div>
                         </div>
                       </div>
                     )}
-
-                    <div className="space-y-3 pt-5 border-t border-zinc-900">
-                      <label className="block text-[10px] text-zinc-600 uppercase font-bold tracking-widest">Text Overlay (Marquee)</label>
-                      <input type="text" value={overlayText} onChange={(e) => setOptions(p => ({ ...p, overlayText: e.target.value }))}
-                        placeholder="ENTER TEXT..."
-                        className="w-full bg-black border border-zinc-900 rounded px-3 py-2 text-[10px] font-mono text-white focus:border-green-500/50 focus:outline-none transition-all placeholder:text-zinc-800" />
-                    </div>
                   </div>
                 )}
               </Card>
@@ -677,226 +885,95 @@ function PlaygroundContent() {
                   </div>
                 </div>
               )}
-              <Button onClick={generate} disabled={!file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)]" isLoading={loading} variant="primary">
-                {loading ? 'PROCESSING...' : 'GENERATE ASCII'}
+              <Button onClick={generate} disabled={!activeLayer.file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)]" isLoading={loading} variant="primary">
+                {loading ? 'PROCESSING...' : 'UPDATE LAYER'}
               </Button>
             </div>
           </div>
 
           {/* ─── Preview Panel ─── */}
           <div className="lg:col-span-8 flex flex-col gap-4">
-            <Card className="flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[500px] card-hover-animation">
+            <Card className="relative flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[500px] card-hover-animation" ref={compositionRef}>
+              <div className="relative flex-1 bg-[#111] overflow-hidden">
+                {/* Composition Canvas */}
+                <CompositionCanvas
+                  layers={layers}
+                  activeLayerId={activeLayerId}
+                  onSelectLayer={setActiveLayerId}
+                  onUpdateTransform={(id, t) => updateLayerTransform(id, t)}
+                  width={800} height={600} scale={1}
+                  globalFrameCount={globalFrameCount}
+                  audioMetrics={audioMetrics}
+                />
+              </div>
+
               {/* Title Bar */}
-              <div className="flex justify-between items-center px-4 py-2.5 bg-zinc-900/50 border-b border-zinc-800">
+              <div className="absolute top-0 left-0 right-0 flex justify-between items-center px-4 py-2.5 bg-zinc-900/80 backdrop-blur border-b border-zinc-800 z-50">
                 <div className="flex gap-1.5">
                   <div className="w-2.5 h-2.5 rounded-full bg-red-500/40" />
                   <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/40" />
                   <div className="w-2.5 h-2.5 rounded-full bg-green-500/40" />
                 </div>
                 <div className="text-[10px] text-zinc-600 font-mono uppercase tracking-widest">
-                  {loading ? 'Processing...' : frames.length > 0 ? 'Output' : 'Preview'}
+                  COMPOSITION PREVIEW
                 </div>
-                <div className="text-[10px] text-zinc-700 font-mono">
-                  {frames.length > 0 && `${frames.length}f · ${fps}fps`}
-                </div>
-              </div>
-
-              {/* Main Content Area */}
-              <div className="flex-1 overflow-auto relative" style={{ background: bgTheme.bg }}>
-                {frames.length > 0 ? (
-                  <div className="h-full flex items-center justify-center">
-                    {/* ASCII Output */}
-                    <div className="flex items-center justify-center p-6 w-full">
-                      {(colorMode || renderMode === 'halfblock') ? (
-                        <pre
-                          className="whitespace-pre select-text font-mono"
-                          style={{ fontSize: `${fontSize}px`, lineHeight: `${fontSize + 2}px` }}
-                          dangerouslySetInnerHTML={{ __html: activeFrame }}
-                        />
-                      ) : (
-                        <pre className="whitespace-pre select-text font-mono" style={{ fontSize: `${fontSize}px`, lineHeight: `${fontSize + 2}px`, color }}>
-                          {activeFrame}
-                        </pre>
-                      )}
-                    </div>
-                  </div>
-                ) : (
-                  <div className="h-full flex items-center justify-center text-center">
-                    <div>
-                      <div className="text-3xl mb-3 opacity-20">⚡</div>
-                      <div className="text-xs text-zinc-700 uppercase tracking-widest">Waiting for Input</div>
-                    </div>
-                  </div>
-                )}
-
-
-                {/* Text Overlay Layer */}
-                {overlayText && (
-                  <div className="absolute inset-x-0 bottom-10 flex justify-center pointer-events-none overflow-hidden pb-4">
-                    <div className="bg-black/80 px-4 py-1 rounded backdrop-blur-sm border border-zinc-800/50">
-                      <span className="font-mono text-xl md:text-3xl font-bold tracking-widest text-transparent bg-clip-text bg-gradient-to-r from-red-500 via-yellow-500 to-blue-500 animate-pulse uppercase shadow-[0_0_20px_rgba(255,255,255,0.2)]">
-                        {overlayText}
-                      </span>
-                    </div>
-                  </div>
-                )}
-              </div>
-
-              {/* Playback Controls */}
-              {frames.length > 1 && (
-                <div className="border-t border-zinc-800 bg-zinc-950 px-4 py-2 flex items-center gap-4">
-                  <button onClick={() => setIsPlaying(!isPlaying)}
-                    className="text-zinc-400 hover:text-white transition-colors">
+                <div className="flex gap-2 items-center">
+                  <Button size="sm" variant="ghost" onClick={() => setIsPlaying(!isPlaying)} className="h-6 w-6 p-0 text-zinc-500 hover:text-white" title={isPlaying ? "Pause Animation" : "Play Animation"}>
                     {isPlaying ? (
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><rect x="6" y="4" width="4" height="16" /><rect x="14" y="4" width="4" height="16" /></svg>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
                     ) : (
-                      <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor"><polygon points="5,3 19,12 5,21" /></svg>
+                      <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><path d="M5 3l14 9-14 9V3z" /></svg>
                     )}
-                  </button>
+                  </Button>
 
-                  {/* Scrubber */}
-                  <input type="range" min={0} max={frames.length - 1} value={currentFrame}
-                    onChange={(e) => { setCurrentFrame(parseInt(e.target.value)); setIsPlaying(false); }}
-                    className="flex-1 h-1 accent-green-500 cursor-pointer" />
+                  <div className="flex bg-zinc-800/50 rounded-md p-0.5 border border-zinc-700/50">
+                    <button onClick={downloadShareCard} className="px-2 py-0.5 text-[9px] text-zinc-300 hover:text-white hover:bg-zinc-700 rounded transition-colors" title="Export Composite as PNG">PNG</button>
+                    <div className="w-[1px] bg-zinc-700/50 my-0.5" />
+                    <button onClick={() => downloadMp4(false)} className="px-2 py-0.5 text-[9px] text-zinc-300 hover:text-white hover:bg-zinc-700 rounded transition-colors" title="Export Composite as MP4">MP4</button>
+                    <div className="w-[1px] bg-zinc-700/50 my-0.5" />
+                    <button onClick={downloadHtml} className="px-2 py-0.5 text-[9px] text-zinc-300 hover:text-white hover:bg-zinc-700 rounded transition-colors" title="Export Active Layer as HTML">HTML</button>
+                  </div>
 
-                  <span className="text-[10px] font-mono text-zinc-600 w-16 text-right">
-                    {currentFrame + 1}/{frames.length}
-                  </span>
+                  <Button size="sm" variant="secondary" onClick={() => setShowSaveModal(true)} className="text-[9px] h-6 px-2 ml-1">
+                    Save
+                  </Button>
                 </div>
-              )}
-
-              {/* Status Bar */}
-              <div className="h-7 bg-zinc-950 border-t border-zinc-900 flex items-center justify-between px-4 text-[10px] font-mono text-zinc-600">
-                <div className="flex items-center gap-2">
-                  {loading ? (
-                    <><div className="w-1.5 h-1.5 rounded-full bg-green-500 animate-pulse" /><span className="text-green-500">PROCESSING</span></>
-                  ) : frames.length > 0 ? (
-                    <><div className="w-1.5 h-1.5 rounded-full bg-green-500" /><span>READY</span></>
-                  ) : (
-                    <><div className="w-1.5 h-1.5 rounded-full bg-zinc-700" /><span>IDLE</span></>
-                  )}
-                </div>
-                <div style={{ color }}>{fontSize}px · {color.toUpperCase()}</div>
               </div>
+
+
+
             </Card>
 
-            {/* Export Buttons */}
-            {frames.length > 0 && (
-              <div className="grid grid-cols-4 gap-2">
-                <button onClick={copyToClipboard}
-                  className="h-8 rounded-md border-2 border-zinc-800 hover:border-zinc-600 bg-zinc-950 text-zinc-500 hover:text-white transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                  <svg xmlns="http://www.w3.org/2000/svg" width="10" height="10" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2" /><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1" /></svg>
-                  Copy
-                </button>
-                <button onClick={() => setShowSaveModal(true)}
-                  className="h-8 rounded-md border-2 border-green-900/30 hover:border-green-500/50 bg-green-500/5 text-green-600 hover:text-green-400 transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                  Save
-                </button>
-                <button onClick={downloadTxt}
-                  className="h-8 rounded-md border-2 border-zinc-800 hover:border-zinc-600 bg-zinc-950 text-zinc-500 hover:text-white transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                  .TXT
-                </button>
-                <button onClick={downloadHtml}
-                  className="h-8 rounded-md border-2 border-zinc-800 hover:border-zinc-600 bg-zinc-950 text-zinc-500 hover:text-white transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                  .HTML
-                </button>
-                <button onClick={downloadPng}
-                  className="h-8 rounded-md border-2 border-zinc-800 hover:border-zinc-600 bg-zinc-950 text-zinc-500 hover:text-white transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                  .PNG
-                </button>
-                <button onClick={downloadMp4}
-                  className="h-8 rounded-md border-2 border-zinc-800 hover:border-zinc-600 bg-zinc-950 text-zinc-500 hover:text-white transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                  .MP4
-                </button>
-                <div className="h-8">
-                  <GistManager content={activeFrame} />
-                </div>
-                <button onClick={downloadShareCard}
-                  className="h-8 rounded-md border-2 border-indigo-900/30 hover:border-indigo-500/50 bg-indigo-500/5 text-indigo-400 hover:text-indigo-200 transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                  Share Card
-                </button>
-                <button onClick={() => setFrames([])}
-                  className="h-8 rounded-md border-2 border-red-900/30 hover:border-red-500/50 bg-red-500/5 text-red-600 hover:text-red-400 transition-all text-[9px] uppercase tracking-wider flex items-center justify-center gap-1.5">
-                  Clear
-                </button>
-              </div>
-            )}
+            <div className="text-zinc-500 text-xs font-mono text-center">
+              Drag layers to position • Select layer to edit properties
+            </div>
           </div>
-        </div>
+        </div >
+      </main >
 
-        {/* Save Modal */}
-        {showSaveModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/80 backdrop-blur-sm">
-            <div className="bg-zinc-950 border border-zinc-800 rounded-xl p-6 w-full max-w-sm space-y-4">
-              <h3 className="text-xl font-bold text-white">Save to Library</h3>
+      {/* Save Modal */}
+      {
+        showSaveModal && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+            <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-xl w-full max-w-md shadow-2xl space-y-4">
+              <h3 className="text-lg font-bold text-white">Save to Library</h3>
+              <p className="text-sm text-zinc-400">Save this ASCII generation to your personal gallery.</p>
               <input
                 type="text"
-                placeholder="Animation Name"
+                placeholder="Name your creation..."
                 value={saveName}
                 onChange={(e) => setSaveName(e.target.value)}
-                className="w-full bg-zinc-900 border border-zinc-700 rounded-lg px-4 py-2 text-white focus:outline-none focus:border-green-500"
+                className="w-full bg-black border border-zinc-800 rounded px-4 py-3 text-white focus:border-green-500 focus:outline-none"
+                autoFocus
               />
-              <div className="flex justify-end gap-2">
-                <button
-                  onClick={() => setShowSaveModal(false)}
-                  className="px-4 py-2 text-sm text-zinc-400 hover:text-white"
-                >
-                  Cancel
-                </button>
-                <button
-                  onClick={() => handleSaveToLibrary(saveName)}
-                  disabled={!saveName.trim()}
-                  className="px-4 py-2 text-sm text-white bg-green-600 hover:bg-green-500 rounded-lg disabled:opacity-50"
-                >
-                  Save
-                </button>
+              <div className="flex justify-end gap-3 pt-2">
+                <Button variant="ghost" onClick={() => setShowSaveModal(false)}>Cancel</Button>
+                <Button variant="primary" onClick={() => handleSaveToLibrary(saveName)} disabled={!saveName.trim()}>Save</Button>
               </div>
             </div>
           </div>
-        )}
-
-        {/* Hidden Share Card */}
-        <ShareCard
-          ref={shareCardRef}
-          content={activeFrame}
-          fontSize={fontSize}
-          color={customColor}
-          bgTheme={bgTheme}
-          isColorMode={colorMode}
-        />
-      </main>
-
-      {/* History Timeline Footer */}
-      {(historyState.past.length > 0 || historyState.future.length > 0) && (
-        <div className="fixed bottom-0 left-0 right-0 h-16 bg-zinc-950 border-t border-zinc-800 flex items-center px-6 z-40 overflow-x-auto custom-scrollbar gap-2">
-          <div className="text-[10px] uppercase font-bold text-zinc-600 mr-2 sticky left-0 bg-zinc-950 pr-2">History</div>
-
-          {historyState.past.map((state, i) => (
-            <button key={`past-${i}`} onClick={() => setOptions(state)}
-              className="flex-shrink-0 w-8 h-8 rounded border border-zinc-800 bg-zinc-900/50 hover:border-zinc-600 hover:bg-zinc-800 transition-all flex items-center justify-center relative group">
-              <div className="w-3 h-3 rounded-full" style={{ background: state.color }}></div>
-              <span className="absolute -top-8 bg-zinc-800 text-white text-[9px] px-2 py-1 rounded opacity-0 group-hover:opacity-100 transition-opacity whitespace-nowrap">
-                {state.renderMode} · {state.width}ch
-              </span>
-            </button>
-          ))}
-
-          {/* Current State Indicator */}
-          <div className="flex-shrink-0 w-8 h-8 rounded border-2 border-green-500 bg-zinc-900 flex items-center justify-center">
-            <div className="w-3 h-3 rounded-full" style={{ background: color }}></div>
-          </div>
-
-          {historyState.future.map((state, i) => (
-            <button key={`future-${i}`} onClick={() => {
-              // To redo specific steps we might need a jump function, but for now just setting it works as a branch
-              setOptions(state)
-            }}
-              className="flex-shrink-0 w-8 h-8 rounded border border-zinc-800 bg-zinc-900/30 hover:border-zinc-600 hover:bg-zinc-800 transition-all flex items-center justify-center opacity-50 hover:opacity-100">
-              <div className="w-3 h-3 rounded-full" style={{ background: state.color }}></div>
-            </button>
-          ))}
-        </div>
-      )}
+        )
+      }
     </div>
   );
 }

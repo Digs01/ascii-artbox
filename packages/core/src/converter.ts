@@ -11,10 +11,10 @@ import { AsciiOptions, getGlyph, getLuminance, SIMPLE_CHARSET, hexToRgb, posteri
 //   0x40 0x80   (row 3)
 const BRAILLE_BASE = 0x2800;
 const BRAILLE_DOT_MAP = [
-    [0x01, 0x08],  // row 0
-    [0x02, 0x10],  // row 1
-    [0x04, 0x20],  // row 2
-    [0x40, 0x80],  // row 3
+    [0x01, 0x08],  // row 0: dots 1, 4
+    [0x02, 0x10],  // row 1: dots 2, 5
+    [0x04, 0x20],  // row 2: dots 3, 6
+    [0x40, 0x80],  // row 3: dots 7, 8
 ];
 
 // ─── Edge detection characters by angle ───
