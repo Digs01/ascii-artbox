@@ -63,6 +63,19 @@ export function useHistory<T>(initialPresent: T) {
         });
     }, []);
 
+    const replace = useCallback((newPresent: T | ((curr: T) => T)) => {
+        setState((currentState) => {
+            const { past, present, future } = currentState;
+            const value = newPresent instanceof Function ? newPresent(present) : newPresent;
+
+            return {
+                past,
+                present: value,
+                future,
+            };
+        });
+    }, []);
+
     const reset = useCallback((newPresent: T) => {
         setState({
             past: [],
@@ -71,5 +84,5 @@ export function useHistory<T>(initialPresent: T) {
         })
     }, []);
 
-    return { state: state.present, set, undo, redo, canUndo, canRedo, reset, historyState: state };
+    return { state: state.present, set, replace, undo, redo, canUndo, canRedo, reset, historyState: state };
 }

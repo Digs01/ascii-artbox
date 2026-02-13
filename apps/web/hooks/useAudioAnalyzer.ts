@@ -22,16 +22,26 @@ export function useAudioAnalyzer() {
     const audioElementRef = useRef<HTMLAudioElement | null>(null);
     const gainNodeRef = useRef<GainNode | null>(null);
 
+    // Stream Destination for Recording
+    const streamDestinationRef = useRef<MediaStreamAudioDestinationNode | null>(null);
+
     // Initialize Audio Context
     const initAudio = useCallback(() => {
         if (!audioContextRef.current) {
             audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
             analyserRef.current = audioContextRef.current.createAnalyser();
-            analyserRef.current.fftSize = 512; // Higher resolution
+            analyserRef.current.fftSize = 512;
             analyserRef.current.smoothingTimeConstant = 0.8;
 
             gainNodeRef.current = audioContextRef.current.createGain();
             gainNodeRef.current.gain.value = 1.0;
+
+            // Create Stream Destination for recording
+            streamDestinationRef.current = audioContextRef.current.createMediaStreamDestination();
+
+            // Connect Gain to Analyser AND Stream Destination
+            gainNodeRef.current.connect(analyserRef.current);
+            gainNodeRef.current.connect(streamDestinationRef.current);
 
             const bufferLength = analyserRef.current.frequencyBinCount;
             dataArrayRef.current = new Uint8Array(bufferLength);
@@ -46,15 +56,15 @@ export function useAudioAnalyzer() {
 
             const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
 
-            // Disconnect old source
             if (sourceRef.current) sourceRef.current.disconnect();
 
             const source = ctx.createMediaStreamSource(stream);
-            // Mic -> Gain -> Analyser
             source.connect(gainNodeRef.current!);
-            gainNodeRef.current!.connect(analyserRef.current!);
-            sourceRef.current = source;
 
+            // Note: For mic, we DON'T connect to ctx.destination to avoid feedback loop
+            // But it IS connected to streamDestinationRef via gainNode
+
+            sourceRef.current = source;
             setSourceType('mic');
             setIsListening(true);
         } catch (err) {
@@ -68,7 +78,6 @@ export function useAudioAnalyzer() {
             const ctx = initAudio();
             if (ctx.state === 'suspended') await ctx.resume();
 
-            // Create Audio Element
             if (audioElementRef.current) {
                 audioElementRef.current.pause();
                 audioElementRef.current.src = '';
@@ -80,17 +89,15 @@ export function useAudioAnalyzer() {
             audio.loop = true;
             audioElementRef.current = audio;
 
-            // Disconnect old source
             if (sourceRef.current) sourceRef.current.disconnect();
 
             const source = ctx.createMediaElementSource(audio);
-            // Element -> Gain -> Analyser -> Destination
             source.connect(gainNodeRef.current!);
-            gainNodeRef.current!.connect(analyserRef.current!);
-            analyserRef.current!.connect(ctx.destination);
+
+            // For file, we ALSO connect to speakers
+            gainNodeRef.current!.connect(ctx.destination);
 
             sourceRef.current = source;
-
             await audio.play();
             setSourceType('file');
             setIsListening(true);
@@ -114,30 +121,19 @@ export function useAudioAnalyzer() {
         if (!analyserRef.current || !dataArrayRef.current || !isListening) {
             return { bass: 0, mid: 0, treble: 0, volume: 0 };
         }
-
-        analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+        analyserRef.current.getByteFrequencyData(dataArrayRef.current as any);
         const data = dataArrayRef.current;
-        const length = data.length; // This will be 256 for fftSize 512
+        const length = data.length;
 
         let bassSum = 0, midSum = 0, trebleSum = 0, totalSum = 0;
-
-        // Revised bands for 512 FFT (256 bins)
-        // Assuming sampleRate 44100Hz, bin width = 44100 / 512 = ~86.13 Hz
-        // Bass: indices 0 to 10 (~0-860Hz)
         for (let i = 0; i < 10; i++) bassSum += data[i];
-
-        // Mid: indices 10 to 60 (~860Hz-5kHz)
         for (let i = 10; i < 60; i++) midSum += data[i];
-
-        // Treble: indices 60 to 256 (~5kHz+)
         for (let i = 60; i < length; i++) trebleSum += data[i];
-
         for (let i = 0; i < length; i++) totalSum += data[i];
 
-        // Normalizing and adding some punch
         const normalize = (val: number, count: number) => {
             const avg = val / count;
-            return Math.min(1, Math.pow(avg / 255, 0.8) * 1.5); // Boost and non-linear curve
+            return Math.min(1, Math.pow(avg / 255, 0.8) * 1.5);
         };
 
         return {
@@ -164,7 +160,8 @@ export function useAudioAnalyzer() {
         startFile,
         stopAudio,
         getAudioMetrics,
-        audioContext: audioContextRef.current
+        audioContext: audioContextRef.current,
+        outputStream: streamDestinationRef.current?.stream
     }), [isListening, sourceType, startMic, startFile, stopAudio, getAudioMetrics]);
 }
 

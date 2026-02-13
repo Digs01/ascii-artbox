@@ -1,5 +1,7 @@
 'use client';
 
+import { clsx } from 'clsx';
+import { motion, AnimatePresence } from 'framer-motion';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { AsciiAnimation } from '@asciiweb/react';
 import { Card } from '../../components/ui/Card';
@@ -9,16 +11,21 @@ import { Nav } from '../../components/ui/Nav';
 import { ToastProvider, useToast } from '../../components/ui/ToastContext';
 import { useLayers } from '../../hooks/useLayers';
 import { LayerManager } from '../../components/playground/LayerManager';
-import { CompositionCanvas } from '../../components/playground/CompositionCanvas';
-import html2canvas from 'html2canvas';
+import { PresetLibrary } from '../../components/playground/PresetLibrary';
+import { PRESETS, Preset } from '../../config/presets';
+
 import { Layer, LayerOptions } from '../../types/layer';
 import { useAudioAnalyzer, AudioMetrics } from '../../hooks/useAudioAnalyzer';
 import { AudioControlPanel } from '../../components/playground/AudioControlPanel';
 import { useScreenRecorder } from '../../hooks/useScreenRecorder';
 import { useAsciiCanvasRenderer } from '../../hooks/useAsciiCanvasRenderer';
+import { CompositionCanvas } from '../../components/playground/CompositionCanvas';
+import html2canvas from 'html2canvas';
+import { useGifExport } from '../../hooks/useGifExport';
 
 const DEFAULT_CHARSET = " .:-=+*#%@";
-const DENSE_CHARSET = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
+const DENSE_CHARSET = "@%#*+=-:. ";
+import { Undo2, Redo2 } from 'lucide-react';
 const MATRIX_CHARSET = "01";
 
 // Color Presets
@@ -33,11 +40,26 @@ const COLOR_PRESETS = [
 
 // Background Themes
 const BG_THEMES = [
-  { label: 'Black', bg: '#000000', border: 'border-zinc-800' },
-  { label: 'Dark', bg: '#111111', border: 'border-zinc-700' },
+  { label: 'Black', bg: '#000000', border: 'border-border' },
+  { label: 'Dark', bg: '#121212', border: 'border-border-hover' },
   { label: 'Terminal', bg: '#0a1a0a', border: 'border-green-900/30' },
   { label: 'Navy', bg: '#0a0a1a', border: 'border-blue-900/30' },
 ];
+
+const container = {
+  hidden: { opacity: 0 },
+  show: {
+    opacity: 1,
+    transition: {
+      staggerChildren: 0.1
+    }
+  }
+};
+
+const item = {
+  hidden: { opacity: 0, y: 20 },
+  show: { opacity: 1, y: 0 }
+};
 
 export default function Playground() {
   return (
@@ -63,7 +85,10 @@ function PlaygroundContent() {
     removeLayer,
     duplicateLayer,
     reorderLayers,
-    setLayerAscii
+    setLayerAscii,
+    commitLayerTransform,
+    replaceLayerOptions,
+    undo, redo, canUndo, canRedo
   } = useLayers();
 
   // Animation State
@@ -73,6 +98,8 @@ function PlaygroundContent() {
   // Audio State
   const audioAnalyzer = useAudioAnalyzer();
   const canvasRef = useRef<HTMLDivElement>(null);
+  const compositionRef = useRef<HTMLDivElement>(null);
+  const shareCardRef = useRef<HTMLDivElement>(null);
 
   // Animation Loop (approx 12fps global or higher?)
   // Let's run at 12fps for retro feel, or 30/60 for smoothness but update frame index based on time?
@@ -90,12 +117,47 @@ function PlaygroundContent() {
     width: 800,
     height: 600,
     globalFrameCount,
-    audioMetrics
+    audioMetrics,
+    backgroundColor: activeLayer?.options.bgTheme?.bg || '#111111'
   });
 
+  // Keyboard Shortcuts for Undo/Redo
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
+        e.preventDefault();
+        if (e.shiftKey) {
+          canRedo && redo();
+        } else {
+          canUndo && undo();
+        }
+      }
+      if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
+        e.preventDefault();
+        canRedo && redo();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [undo, redo, canUndo, canRedo]);
+
+  // Audio Analysis
+  // Audio Analysis
+  const { isListening, sourceType: audioSourceType, startMic, startFile: startAudioFile, stopAudio: stopAudioAnalysis, getAudioMetrics, outputStream } = useAudioAnalyzer();
+
+  // Screen Recorder
   const { isRecording, startRecording, stopRecording, recordingTime, recordingError } = useScreenRecorder({
-    externalStream: canvasStream
+    cropTargetRef: compositionRef,
+    audioStream: outputStream
   });
+
+  // GIF Export
+  const { isExporting: isGifExporting, progress: gifProgress, exportGif } = useGifExport({
+    compositionRef,
+    fps: 12
+  });
+
+  const [showPresetLibrary, setShowPresetLibrary] = useState(false);
 
   useEffect(() => {
     if (recordingError) {
@@ -431,6 +493,22 @@ function PlaygroundContent() {
     URL.revokeObjectURL(url);
   };
 
+  const handleApplyPreset = (preset: Preset) => {
+    if (!activeLayer) return;
+
+    // Apply Options
+    if (preset.options) {
+      updateLayerOptions(activeLayer.id, preset.options as any);
+    }
+
+    // Apply Transform
+    if (preset.transform) {
+      updateLayerTransform(activeLayer.id, preset.transform);
+    }
+
+    toast(`Applied preset: ${preset.name}`, 'success');
+  };
+
   const handleSaveToLibrary = async (name: string) => {
     try {
       if (!activeLayer || activeLayer.frames.length === 0) return;
@@ -456,12 +534,9 @@ function PlaygroundContent() {
   };
 
   // Export Share Card
-  const shareCardRef = useRef<HTMLDivElement>(null);
   // We need to capture the CompositionCanvas specifically
   // But html2canvas might have trouble with some CSS.
   // Actually, we can just wrap the CompositionCanvas in a div and ref that.
-
-  const compositionRef = useRef<HTMLDivElement>(null);
 
   const downloadShareCard = async () => {
     if (!compositionRef.current) return;
@@ -548,513 +623,563 @@ function PlaygroundContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [generate]);
 
-  if (!activeLayer) return <div className="min-h-screen bg-black text-white pt-24 text-center">Loading layers...</div>;
+  if (!activeLayer) {
+    return (
+      <div className="min-h-screen bg-black text-white pt-24 text-center">Loading layers...</div>
+    );
+  }
 
   return (
-    <div className="min-h-screen bg-black text-white">
+    <div className="min-h-screen bg-background text-text-primary">
       <Nav />
       {/* Composition wrapper for capturing */}
 
       <main className="pt-24 px-6 max-w-[1400px] mx-auto pb-20">
         <header className="mb-8">
           <h1 className="text-4xl font-bold tracking-tight mb-2">Workstation</h1>
-          <p className="text-zinc-500">Compositing Mode</p>
+          <p className="text-text-muted">Compositing Mode</p>
         </header>
 
         <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
           {/* ─── Controls Panel ─── */}
-          <div className="lg:col-span-4 space-y-4 flex flex-col h-[calc(100vh-160px)] sticky top-24">
+          <motion.div
+            variants={container}
+            initial="hidden"
+            animate="show"
+            className="lg:col-span-4 space-y-4 flex flex-col h-[calc(100vh-160px)] sticky top-24"
+          >
 
             {/* TOP ACTIONS */}
-            <div className="space-y-3 pb-2">
+            <motion.div variants={item} className="space-y-3 pb-2">
               <Button onClick={generate} disabled={!activeLayer.file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)]" isLoading={loading} variant="primary">
-                {loading ? 'PROCESSING...' : 'GENERATE'}
+                {loading ? 'PROCESSING...' : 'GENERATE ASCII'}
               </Button>
               {loading && (
                 <div className="space-y-1 px-1">
-                  <div className="h-1 bg-zinc-900 rounded-full overflow-hidden">
-                    <div className="h-full bg-green-500 transition-all duration-300 rounded-full" style={{ width: `${progress}%` }} />
+                  <div className="h-1 bg-surface-active rounded-full overflow-hidden">
+                    <div className="h-full bg-accent-success transition-all duration-300 rounded-full" style={{ width: `${progress}%` }} />
                   </div>
-                  <div className="flex justify-between items-center text-[9px] font-mono text-zinc-600">
+                  <div className="flex justify-between items-center text-[9px] font-mono text-text-muted">
                     <span>PROCESSING PIPELINE</span>
                     <span>{Math.round(progress)}%</span>
                   </div>
                 </div>
               )}
-            </div>
+            </motion.div>
 
-            <div className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
+            <motion.div variants={container} className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
 
               {/* LAYERS MANAGER */}
-              <LayerManager
-                layers={layers}
-                activeLayerId={activeLayerId}
-                onSelectLayer={setActiveLayerId}
-                onToggleVisibility={(id) => {
-                  const l = layers.find(x => x.id === id);
-                  if (l) updateLayer(id, { visible: !l.visible });
-                }}
-                onToggleLock={(id) => {
-                  const l = layers.find(x => x.id === id);
-                  if (l) updateLayer(id, { locked: !l.locked });
-                }}
-                onRemoveLayer={removeLayer}
-                onDuplicateLayer={duplicateLayer}
-                onReorderLayers={reorderLayers}
-                onAddLayer={() => addLayer(null)}
-              />
-
-
+              <motion.div variants={item}>
+                <LayerManager
+                  layers={layers}
+                  activeLayerId={activeLayerId}
+                  onSelectLayer={setActiveLayerId}
+                  onToggleVisibility={(id) => {
+                    const l = layers.find(x => x.id === id);
+                    if (l) updateLayer(id, { visible: !l.visible });
+                  }}
+                  onToggleLock={(id) => {
+                    const l = layers.find(x => x.id === id);
+                    if (l) updateLayer(id, { locked: !l.locked });
+                  }}
+                  onRemoveLayer={removeLayer}
+                  onDuplicateLayer={duplicateLayer}
+                  onReorderLayers={reorderLayers}
+                  onAddLayer={() => addLayer(null)}
+                />
+              </motion.div>
 
               {/* SECTION 1: Source */}
-              <Card className="space-y-4 card-hover-animation">
-                <div className="flex items-center justify-between">
-                  <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Source</h3>
-                  <span className="text-[9px] text-zinc-600">{activeLayer.name}</span>
-                </div>
-
-                <div
-                  className={`relative group transition-all duration-200 ${isDraggingFile ? 'scale-[1.01]' : ''}`}
-                  onDragOver={handleDragOver}
-                  onDragLeave={handleDragLeave}
-                  onDrop={handleDrop}
-                >
-                  <input type="file" accept="image/*,video/*" onChange={handleFileChange}
-                    className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                  <div className={`border border-dashed rounded-lg p-5 text-center transition-all ${isDraggingFile
-                    ? 'border-green-500 bg-green-500/5 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
-                    : 'border-zinc-800 group-hover:border-zinc-700'}`}>
-                    {activeLayer.file ? (
-                      <div className="text-white text-xs font-mono truncate">
-                        {activeLayer.file.name}
-                        <span className="block text-[10px] text-zinc-600 mt-1">{(activeLayer.file.size / 1024).toFixed(1)} KB</span>
-                      </div>
-                    ) : (
-                      <div className={`text-xs ${isDraggingFile ? 'text-green-400' : 'text-zinc-600'}`}>
-                        {isDraggingFile ? 'DROP FILE' : 'DROP IMAGE/VIDEO (Updates Active Layer)'}
-                      </div>
-                    )}
+              <motion.div variants={item}>
+                <Card className="space-y-4 card-hover-animation">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Source</h3>
+                    <span className="text-[9px] text-text-secondary">{activeLayer.name}</span>
                   </div>
-                </div>
 
-                {activeLayer.previewUrl && activeLayer.file && (
-                  <div className="mt-3 rounded-lg overflow-hidden border border-zinc-800 bg-zinc-950">
-                    {activeLayer.type === 'video' ? (
-                      <video src={activeLayer.previewUrl} className="w-full max-h-48 object-contain" autoPlay loop muted playsInline />
-                    ) : (
-                      <img src={activeLayer.previewUrl} alt="Source preview" className="w-full max-h-48 object-contain" />
-                    )}
+                  <div
+                    className={`relative group transition-all duration-200 ${isDraggingFile ? 'scale-[1.01]' : ''}`}
+                    onDragOver={handleDragOver}
+                    onDragLeave={handleDragLeave}
+                    onDrop={handleDrop}
+                  >
+                    <input type="file" accept="image/*,video/*" onChange={handleFileChange}
+                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                    <div className={clsx(
+                      "border border-dashed rounded-lg p-5 text-center transition-all",
+                      isDraggingFile
+                        ? 'border-accent-success bg-accent-success/5 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
+                        : 'border-border group-hover:border-border-hover'
+                    )}>
+                      {activeLayer.file ? (
+                        <div className="text-text-primary text-xs font-mono truncate">
+                          {activeLayer.file.name}
+                          <span className="block text-[10px] text-text-muted mt-1">{(activeLayer.file.size / 1024).toFixed(1)} KB</span>
+                        </div>
+                      ) : (
+                        <div className={clsx("text-xs", isDraggingFile ? 'text-accent-success' : 'text-text-muted')}>
+                          {isDraggingFile ? 'DROP FILE' : 'DROP IMAGE/VIDEO (Updates Active Layer)'}
+                        </div>
+                      )}
+                    </div>
                   </div>
-                )}
-              </Card>
+
+                  {activeLayer.previewUrl && activeLayer.file && (
+                    <div className="mt-3 rounded-lg overflow-hidden border border-border bg-black">
+                      {activeLayer.type === 'video' ? (
+                        <video src={activeLayer.previewUrl} className="w-full max-h-48 object-contain" autoPlay loop muted playsInline />
+                      ) : (
+                        <img src={activeLayer.previewUrl} alt="Source preview" className="w-full max-h-48 object-contain" />
+                      )}
+                    </div>
+                  )}
+                </Card>
+              </motion.div>
 
 
 
 
               {/* SECTION 2: ENGINE */}
-              <Card className="space-y-5 card-hover-animation">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Generative Engine</h3>
+              <motion.div variants={item}>
+                <Card className="space-y-5 card-hover-animation">
+                  <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Generative Engine</h3>
 
-                <div>
-                  <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Render Algorithm</label>
-                  <div className="flex gap-1 flex-wrap">
-                    {[
-                      { value: 'standard' as const, label: 'Mode', icon: 'Aa' },
-                      { value: 'braille' as const, label: 'Dots', icon: '⣿' },
-                      { value: 'halfblock' as const, label: 'Pixel', icon: '▄▀' },
-                      { value: 'edge' as const, label: 'Edge', icon: '╱╲' },
-                      { value: 'silhouette' as const, label: 'Cutout', icon: '◐' },
-                    ].map(mode => (
-                      <button key={mode.value} onClick={() => setOptions(p => ({ ...p, renderMode: mode.value }))}
-                        className={`flex-1 min-w-[55px] flex flex-col items-center py-1.5 rounded border-2 transition-all ${renderMode === mode.value
-                          ? 'border-green-500 bg-green-500/5 text-white shadow-[0_0_10px_rgba(34,197,94,0.1)]'
-                          : 'border-zinc-900 bg-zinc-900/20 hover:border-zinc-800 text-zinc-600 hover:text-zinc-500'
-                          }`}>
-                        <div className="text-sm">{mode.icon}</div>
-                        <div className="text-[8px] font-bold uppercase tracking-tight leading-none mt-0.5">{mode.label}</div>
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="space-y-4 pt-2 border-t border-zinc-900">
-                  <Slider label="Output Width" value={width || 100} min={20} max={240} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} ch`} />
-                  {(activeLayer.file?.type.startsWith('video/') || activeLayer.file?.name.toLowerCase().endsWith('.gif')) && (
-                    <Slider label="Motion FPS" value={videoFps || 12} min={1} max={30} onChange={(v) => setOptions(p => ({ ...p, videoFps: v }))} valueDisplay={`${videoFps} FPS`} />
-                  )}
-                </div>
-              </Card>
-
-              {/* SECTION 3: STYLE */}
-              <Card className="space-y-5 card-hover-animation">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Style</h3>
-
-                {/* Palette & Color Group */}
-                <div className="space-y-4">
                   <div>
-                    <div className="flex justify-between items-center mb-2">
-                      <label className="text-[10px] text-zinc-600 uppercase tracking-wider font-bold">Color Theme</label>
-                      <input type="checkbox" checked={colorMode || false} onChange={(e) => setOptions(p => ({ ...p, colorMode: e.target.checked }))}
-                        className="rounded-sm bg-black border-zinc-700 text-green-500 focus:ring-0" />
-                    </div>
-
-                    <div className="flex gap-1.5 flex-wrap">
-                      <button onClick={() => setOptions(p => ({ ...p, palette: undefined, colorMode: false }))}
-                        className={`px-2 py-1 rounded border transition-all text-[9px] uppercase tracking-wider ${!palette && !colorMode ? 'border-white bg-zinc-800 text-white' : 'border-zinc-900 text-zinc-600 hover:border-zinc-700'}`}>
-                        Raw
-                      </button>
+                    <label className="block text-[10px] text-text-muted mb-2 uppercase tracking-wider font-bold">Render Algorithm</label>
+                    <div className="flex gap-1 flex-wrap">
                       {[
-                        { key: 'synthwave', label: 'Synth', colors: ['#500078', '#FF0096'] },
-                        { key: 'cyberpunk', label: 'Cyber', colors: ['#FF0064', '#00FFC8'] },
-                        { key: 'matrix', label: 'Matrix', colors: ['#006400', '#00FF00'] },
-                        { key: 'magma', label: 'Magma', colors: ['#780000', '#FF5000'] },
-                      ].map(paletteItem => (
-                        <button key={paletteItem.key} onClick={() => setOptions(prev => ({ ...prev, palette: paletteItem.key, colorMode: true }))}
-                          className={`px-2 py-1 rounded border transition-all text-[9px] uppercase tracking-wider flex items-center gap-1.5 ${palette === paletteItem.key ? 'border-white bg-zinc-800 text-white' : 'border-zinc-900 text-zinc-600 hover:border-zinc-700'}`}>
-                          <div className="flex -space-x-1">
-                            {paletteItem.colors.map((c, i) => (
-                              <div key={i} className="w-1.5 h-1.5 rounded-full" style={{ background: c }} />
-                            ))}
-                          </div>
-                          {paletteItem.label}
+                        { value: 'standard' as const, label: 'Mode', icon: 'Aa' },
+                        { value: 'braille' as const, label: 'Dots', icon: '⣿' },
+                        { value: 'halfblock' as const, label: 'Pixel', icon: '▄▀' },
+                        { value: 'edge' as const, label: 'Edge', icon: '╱╲' },
+                        { value: 'silhouette' as const, label: 'Cutout', icon: '◐' },
+                      ].map(mode => (
+                        <button key={mode.value} onClick={() => setOptions(p => ({ ...p, renderMode: mode.value }))}
+                          className={clsx(
+                            "flex-1 min-w-[55px] flex flex-col items-center py-1.5 rounded border-2 transition-all",
+                            renderMode === mode.value
+                              ? 'border-accent-success bg-accent-success/5 text-text-primary shadow-[0_0_10px_rgba(34,197,94,0.1)]'
+                              : 'border-surface bg-surface/50 hover:border-border text-text-muted hover:text-text-secondary'
+                          )}>
+                          <div className="text-sm">{mode.icon}</div>
+                          <div className="text-[8px] font-bold uppercase tracking-tight leading-none mt-0.5">{mode.label}</div>
                         </button>
                       ))}
                     </div>
+                  </div>
 
-                    <div className="flex gap-1.5 flex-wrap mt-3">
-                      {COLOR_PRESETS.map(c => (
-                        <button key={c.value} onClick={() => setOptions(p => ({ ...p, color: c.value, customColor: c.value, palette: undefined }))}
-                          className={`w-5 h-5 rounded-sm border transition-all ${color === c.value ? 'border-white ring-1 ring-white/50' : 'border-transparent hover:border-zinc-600'}`}
-                          style={{ background: c.value }}
-                        />
-                      ))}
-                      <div className="relative">
-                        <input type="color" value={customColor || '#ffffff'}
-                          onChange={(e) => setOptions(p => ({ ...p, customColor: e.target.value, color: e.target.value, palette: undefined }))}
-                          className="absolute inset-0 w-5 h-5 opacity-0 cursor-pointer" />
-                        <div className="w-5 h-5 rounded-sm border border-dashed border-zinc-700 flex items-center justify-center text-zinc-600 text-[10px] hover:border-zinc-500">
-                          +
-                        </div>
+                  <div className="space-y-4 pt-2 border-t border-border">
+                    <Slider label="Output Width" value={width || 100} min={20} max={240} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} ch`} />
+                    {(activeLayer.file?.type.startsWith('video/') || activeLayer.file?.name.toLowerCase().endsWith('.gif')) && (
+                      <Slider label="Motion FPS" value={videoFps || 12} min={1} max={30} onChange={(v) => setOptions(p => ({ ...p, videoFps: v }))} valueDisplay={`${videoFps} FPS`} />
+                    )}
+                  </div>
+                </Card>
+              </motion.div>
+
+              {/* SECTION 3: STYLE */}
+              <motion.div variants={item}>
+                <Card className="space-y-5 card-hover-animation">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Style</h3>
+                    <Button variant="ghost" size="sm" onClick={() => setShowPresetLibrary(true)} className="h-5 px-2 text-[9px] border border-border hover:border-accent-primary hover:text-accent-primary">
+                      LIBRARY
+                    </Button>
+                  </div>
+
+                  {/* Palette & Color Group */}
+                  <div className="space-y-4">
+                    {/* Real-time Color Control */}
+                    <div className="space-y-3">
+                      <div className="flex justify-between items-center">
+                        <label className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Color Override</label>
+                        <input type="checkbox" checked={options.colorMode || false} onChange={(e) => setOptions(p => ({ ...p, colorMode: e.target.checked }))}
+                          className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
                       </div>
+
+                      {(options.colorMode) && (
+                        <div className="flex gap-2 h-8">
+                          {/* Native Picker */}
+                          <div className="relative flex-1 group">
+                            <input
+                              type="color"
+                              value={options.color || '#ffffff'}
+                              onChange={(e) => replaceLayerOptions(activeLayer.id, { color: e.target.value, customColor: e.target.value, palette: undefined })}
+                              onBlur={(e) => updateLayerOptions(activeLayer.id, { color: e.target.value })}
+                              className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+                            />
+                            <div className="w-full h-full rounded border border-border group-hover:border-border-hover flex items-center justify-center transition-colors"
+                              style={{ backgroundColor: options.color || '#ffffff' }}
+                            >
+                              <span className="text-[9px] font-mono mix-blend-difference text-white/80">{options.color || '#ffffff'}</span>
+                            </div>
+                          </div>
+
+                          {/* Quick Swatches */}
+                          {COLOR_PRESETS.slice(0, 4).map(c => (
+                            <button
+                              key={c.value}
+                              onClick={() => setOptions(p => ({ ...p, color: c.value, customColor: c.value, palette: undefined }))}
+                              className="w-8 h-8 rounded border border-border hover:border-white transition-all transform hover:scale-105"
+                              style={{ backgroundColor: c.value }}
+                              title={c.label}
+                            />
+                          ))}
+                        </div>
+                      )}
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 pt-2 border-t border-zinc-900">
+                  <div className="grid grid-cols-2 gap-4 pt-2 border-t border-border">
                     <Slider label="Font Size" value={fontSize || 8} min={4} max={20} onChange={(v) => setOptions(p => ({ ...p, fontSize: v }))} valueDisplay={`${fontSize}px`} />
-                    {/* Background Theme is Global or Per Layer? Usually Global for canvas, but let's keep per layer or remove??
-                        Actually, composition has a background.
-                        Let's make this global for now or just affect the layer background style.
-                    */}
                   </div>
-                </div>
-              </Card>
+                </Card>
+              </motion.div>
 
               {/* TRANSFORM CONTROL (New) */}
-              <Card className="space-y-4 card-hover-animation">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Transform</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  <Slider label="Position X" value={activeLayer.transform.x} min={-400} max={400} step={1}
-                    onChange={(v) => updateLayerTransform(activeLayer.id, { x: v })}
-                    valueDisplay={`${activeLayer.transform.x}px`}
-                  />
-                  <Slider label="Position Y" value={activeLayer.transform.y} min={-300} max={300} step={1}
-                    onChange={(v) => updateLayerTransform(activeLayer.id, { y: v })}
-                    valueDisplay={`${activeLayer.transform.y}px`}
-                  />
-                  <div className="col-span-2 flex justify-end">
-                    <button onClick={() => updateLayerTransform(activeLayer.id, { x: 0, y: 0 })} className="text-[9px] text-zinc-500 hover:text-zinc-300 uppercase tracking-wider">Reset Position</button>
-                  </div>
-
-                  <Slider label="Opacity" value={activeLayer.transform.opacity} min={0} max={1} step={0.01}
-                    onChange={(v) => updateLayerTransform(activeLayer.id, { opacity: v })}
-                    valueDisplay={`${Math.round(activeLayer.transform.opacity * 100)}%`}
-                  />
-                  <div className="flex items-end gap-2">
-                    <div className="flex-1">
-                      <Slider label="Scale" value={activeLayer.transform.scale} min={0.1} max={3} step={0.1}
-                        onChange={(v) => updateLayerTransform(activeLayer.id, { scale: v })}
-                        valueDisplay={`${activeLayer.transform.scale.toFixed(1)}x`}
-                      />
-                    </div>
-                    <div className="flex gap-1 mb-1">
-                      <button onClick={() => handleFitToCanvas(false)} title="Fit to Canvas" className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[9px] uppercase hover:bg-zinc-800 text-zinc-400 hover:text-white">Fit</button>
-                      <button onClick={() => handleFitToCanvas(true)} title="Cover Canvas" className="px-2 py-1 bg-zinc-900 border border-zinc-700 rounded text-[9px] uppercase hover:bg-zinc-800 text-zinc-400 hover:text-white">Cover</button>
-                    </div>
-                  </div>
-                  <Slider label="Rotation" value={activeLayer.transform.rotation} min={0} max={360} step={1}
-                    onChange={(v) => updateLayerTransform(activeLayer.id, { rotation: v })}
-                    valueDisplay={`${activeLayer.transform.rotation}°`}
-                  />
-                  <div>
-                    <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Blend Mode</label>
-                    <select
-                      value={activeLayer.transform.blendMode}
-                      onChange={(e) => updateLayerTransform(activeLayer.id, { blendMode: e.target.value as any })}
-                      className="w-full bg-black border border-zinc-900 rounded px-2 py-1 text-[10px] text-white"
-                    >
-                      <option value="normal">Normal</option>
-                      <option value="multiply">Multiply</option>
-                      <option value="screen">Screen</option>
-                      <option value="overlay">Overlay</option>
-                      <option value="darken">Darken</option>
-                      <option value="lighten">Lighten</option>
-                      <option value="difference">Difference</option>
-                      <option value="exclusion">Exclusion</option>
-                    </select>
-
-                    <div className="mt-2">
-                      <label className="block text-[10px] text-zinc-600 mb-2 uppercase tracking-wider font-bold">Animation LUT</label>
-                      <select
-                        value={activeLayer.transform.lut || 'none'}
-                        onChange={(e) => updateLayerTransform(activeLayer.id, { lut: e.target.value as any })}
-                        className="w-full bg-black border border-zinc-900 rounded px-2 py-1 text-[10px] text-white"
-                      >
-                        <option value="none">None</option>
-                        <option value="spectrum">Spectrum (RGB Cycle)</option>
-                        <option value="pulse">Pulse (Brightness)</option>
-                        <option value="flicker">Flicker (Opacity)</option>
-                        <option value="glitch">Glitch (Red/Blue)</option>
-                        <option value="thermal">Thermal (Invert+Hue)</option>
-                        <option value="noir">Noir (Grayscale)</option>
-                        <option value="cyber">Cyber (Neon Glow)</option>
-                      </select>
-                    </div>
-
-                    <div className="flex gap-2 mt-2">
-                      <button
-                        onClick={() => updateLayerTransform(activeLayer.id, { flipX: !activeLayer.transform.flipX })}
-                        className={`flex-1 py-1.5 text-[9px] uppercase font-bold rounded border ${activeLayer.transform.flipX ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
-                      >
-                        Flip H
-                      </button>
-                      <button
-                        onClick={() => updateLayerTransform(activeLayer.id, { flipY: !activeLayer.transform.flipY })}
-                        className={`flex-1 py-1.5 text-[9px] uppercase font-bold rounded border ${activeLayer.transform.flipY ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-500 hover:text-zinc-300'}`}
-                      >
-                        Flip V
-                      </button>
-                    </div>
-
-                    {/* AUDIO BINDING UI - MOVED OUT */}
-                  </div>
-                </div>
-              </Card>
-
-              {/* AUDIO CONTROL */}
-              <Card className="space-y-4 card-hover-animation">
-                <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Audio Source</h3>
-                <AudioControlPanel analyzer={audioAnalyzer} />
-
-                {/* Audio React Bindings - kept here or in transform? User put Audio before Effects, so maybe Audio Control + Reactivity belong here? */}
-                {/* Actually, user said "Transform, Audio, Effects". Binding is usually part of transform, but let's duplicate or move the binding UI here? */}
-                {/* No, the binding UI needs to be with the properties it controls OR standalone. */}
-                {/* The previous UI had binding IN Transform. I'll keep binding in Transform but move the Audio *Source* card to after Transform. */}
-
-                {/* Re-adding Audio Bindings here for clarity if requested? No, user just said "Audio" card. */}
-                {/* But wait, "Link Audio Data" is effectively configuring the layer's reactivity. */}
-                {/* I will keep the binding controls inside the Transform card (as they relate to scale/opacity) but ensure the Layer Reactivity Toggle is prominent. */}
-
-                {/* Let's actually put the Audio REACTIVITY settings (Source selection, Strength, Target) here in the AUDIO card? */}
-                {/* That makes a lot of sense. The "Audio" card handles Source (Mic) AND Reactivity Config. */}
-                {/* Moving the Audio Reactivity UI from Transform to here. */}
-
-                <div className="mt-4 pt-4 border-t border-zinc-900/50">
-                  <div className="flex justify-between items-center mb-3">
-                    <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Audio Reactivity</label>
-                    <input
-                      type="checkbox"
-                      checked={activeLayer.transform.audioReact?.enabled ?? false}
-                      onChange={(e) => updateLayerTransform(activeLayer.id, {
-                        audioReact: { ...activeLayer.transform.audioReact!, enabled: e.target.checked }
-                      } as any)}
-                      className="w-3 h-3 accent-green-500 cursor-pointer"
+              <motion.div variants={item}>
+                <Card className="space-y-4 card-hover-animation">
+                  <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Transform</h3>
+                  <div className="grid grid-cols-2 gap-4">
+                    <Slider label="Position X" value={activeLayer.transform.x} min={-400} max={400} step={1}
+                      onChange={(v) => updateLayerTransform(activeLayer.id, { x: v })}
+                      valueDisplay={`${activeLayer.transform.x}px`}
                     />
-                  </div>
+                    <Slider label="Position Y" value={activeLayer.transform.y} min={-300} max={300} step={1}
+                      onChange={(v) => updateLayerTransform(activeLayer.id, { y: v })}
+                      valueDisplay={`${activeLayer.transform.y}px`}
+                    />
+                    <div className="col-span-2 flex justify-end">
+                      <button onClick={() => updateLayerTransform(activeLayer.id, { x: 0, y: 0 })} className="text-[9px] text-text-muted hover:text-text-primary uppercase tracking-wider">Reset Position</button>
+                    </div>
 
-                  {activeLayer.transform.audioReact?.enabled && (
-                    <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
-                      <div className="grid grid-cols-2 gap-2">
-                        <div>
-                          <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Source</label>
-                          <select
-                            value={activeLayer.transform.audioReact.source}
-                            onChange={(e) => updateLayerTransform(activeLayer.id, {
-                              audioReact: { ...activeLayer.transform.audioReact!, source: e.target.value as any }
-                            } as any)}
-                            className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
-                          >
-                            <option value="bass">Bass</option>
-                            <option value="mid">Mid</option>
-                            <option value="treble">Treble</option>
-                            <option value="volume">Volume</option>
-                          </select>
-                        </div>
-                        <div>
-                          <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Target</label>
-                          <select
-                            value={activeLayer.transform.audioReact.target}
-                            onChange={(e) => updateLayerTransform(activeLayer.id, {
-                              audioReact: { ...activeLayer.transform.audioReact!, target: e.target.value as any }
-                            } as any)}
-                            className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
-                          >
-                            <option value="scale">Scale</option>
-                            <option value="opacity">Opacity</option>
-                            <option value="rotation">Rotation</option>
-                            <option value="distortion">Distortion (Glitch)</option>
-                            <option value="hue">Hue Shift</option>
-                            <option value="rgb-split">RGB Split (Chromatic)</option>
-                          </select>
-                        </div>
-                      </div>
-
-                      <div className="space-y-1">
-                        <div className="flex justify-between text-[9px]">
-                          <span className="text-zinc-600 uppercase">Strength</span>
-                          <span className="text-zinc-400">{(activeLayer.transform.audioReact.strength * 100).toFixed(0)}%</span>
-                        </div>
-                        <input
-                          type="range"
-                          min="0"
-                          max="2"
-                          step="0.05"
-                          value={activeLayer.transform.audioReact.strength}
-                          onChange={(e) => updateLayerTransform(activeLayer.id, {
-                            audioReact: { ...activeLayer.transform.audioReact!, strength: parseFloat(e.target.value) }
-                          } as any)}
-                          className="w-full h-1 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-green-500"
+                    <Slider label="Opacity" value={activeLayer.transform.opacity} min={0} max={1} step={0.01}
+                      onChange={(v) => updateLayerTransform(activeLayer.id, { opacity: v })}
+                      valueDisplay={`${Math.round(activeLayer.transform.opacity * 100)}%`}
+                    />
+                    <div className="flex items-end gap-2">
+                      <div className="flex-1">
+                        <Slider label="Scale" value={activeLayer.transform.scale} min={0.1} max={3} step={0.1}
+                          onChange={(v) => updateLayerTransform(activeLayer.id, { scale: v })}
+                          valueDisplay={`${activeLayer.transform.scale.toFixed(1)}x`}
                         />
                       </div>
-
-                      <button
-                        onClick={() => updateLayerTransform(activeLayer.id, {
-                          audioReact: { ...activeLayer.transform.audioReact!, invert: !activeLayer.transform.audioReact?.invert }
-                        } as any)}
-                        className={`w-full py-1 text-[8px] uppercase font-bold rounded border ${activeLayer.transform.audioReact.invert ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-600'}`}
-                      >
-                        Invert Signal
-                      </button>
-                    </div>
-                  )}
-                </div>
-              </Card>
-
-              {/* SECTION 4: EFFECTS */}
-              <Card className="p-0 overflow-hidden card-hover-animation">
-                <button onClick={() => setShowEffects(!showEffects)}
-                  className="w-full px-5 py-4 flex items-center justify-between text-zinc-500 hover:text-white transition-colors bg-zinc-900/20">
-                  <div className="flex items-center gap-2">
-                    <span className="text-xs font-bold uppercase tracking-widest">4. Effects & Filters</span>
-                    <span className="px-1.5 py-0.5 rounded-full bg-zinc-800 text-[8px] font-mono">ADVANCED</span>
-                  </div>
-                  <span className="text-xs">{showEffects ? '▲' : '▼'}</span>
-                </button>
-
-                {showEffects && (
-                  <div className="p-5 space-y-5 border-t border-zinc-900">
-                    <div>
-                      <label className="block text-[10px] text-zinc-600 mb-2 font-mono uppercase font-bold">Custom Character Set</label>
-                      <input type="text" value={charset} onChange={(e) => setOptions(p => ({ ...p, charset: e.target.value }))}
-                        className="w-full bg-black border border-zinc-900 rounded px-3 py-2 text-[10px] font-mono text-white focus:border-green-500/50 focus:outline-none transition-all" />
-                      <div className="flex gap-1.5 flex-wrap mt-2">
-                        <button onClick={() => setOptions(p => ({ ...p, charset: DEFAULT_CHARSET }))} className="text-[9px] px-1.5 py-0.5 border border-zinc-900 rounded hover:border-zinc-700 text-zinc-600">STD</button>
-                        <button onClick={() => setOptions(p => ({ ...p, charset: DENSE_CHARSET }))} className="text-[9px] px-1.5 py-0.5 border border-zinc-900 rounded hover:border-zinc-700 text-zinc-600">DENSE</button>
-                        <button onClick={() => setOptions(p => ({ ...p, charset: MATRIX_CHARSET }))} className="text-[9px] px-1.5 py-0.5 border border-zinc-900 rounded hover:border-zinc-700 text-zinc-600">BINARY</button>
+                      <div className="flex gap-1 mb-1">
+                        <button onClick={() => handleFitToCanvas(false)} title="Fit to Canvas" className="px-2 py-1 bg-surface border border-border rounded text-[9px] uppercase hover:bg-surface-hover text-text-muted hover:text-text-primary">Fit</button>
+                        <button onClick={() => handleFitToCanvas(true)} title="Cover Canvas" className="px-2 py-1 bg-surface border border-border rounded text-[9px] uppercase hover:bg-surface-hover text-text-muted hover:text-text-primary">Cover</button>
                       </div>
                     </div>
+                    <Slider label="Rotation" value={activeLayer.transform.rotation} min={0} max={360} step={1}
+                      onChange={(v) => updateLayerTransform(activeLayer.id, { rotation: v })}
+                      valueDisplay={`${activeLayer.transform.rotation}°`}
+                    />
+                    <div>
+                      <label className="block text-[10px] text-text-muted mb-2 uppercase tracking-wider font-bold">Blend Mode</label>
+                      <select
+                        value={activeLayer.transform.blendMode}
+                        onChange={(e) => updateLayerTransform(activeLayer.id, { blendMode: e.target.value as any })}
+                        className="w-full bg-black border border-border rounded px-2 py-1 text-[10px] text-text-primary focus:outline-none focus:border-border-hover"
+                      >
+                        <option value="normal">Normal</option>
+                        <option value="multiply">Multiply</option>
+                        <option value="screen">Screen</option>
+                        <option value="overlay">Overlay</option>
+                        <option value="darken">Darken</option>
+                        <option value="lighten">Lighten</option>
+                        <option value="difference">Difference</option>
+                        <option value="exclusion">Exclusion</option>
+                      </select>
 
-                    <div className="grid grid-cols-1 gap-2 border-t border-zinc-900 pt-5">
-                      {[
-                        { label: 'Invert Lighting', value: inverted, key: 'inverted' as const },
-                        { label: 'Sharpen Detail', value: sharpen, key: 'sharpen' as const },
-                        { label: 'Adaptive Contrast', value: clahe, key: 'clahe' as const },
-                        { label: 'Luminance Dither', value: dither, key: 'dither' as const },
-                        { label: 'Isolate Motion', value: frameDiff, key: 'frameDiff' as const, hidden: !((activeLayer.file?.type.startsWith('video/') || activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif'))) },
-                        { label: 'Remove BG', value: removeBackground, key: 'removeBackground' as const },
-                      ].map(f => !f.hidden && (
-                        <div key={f.label} className="flex items-center justify-between">
-                          <label className="text-[10px] text-zinc-500 uppercase tracking-tight">{f.label}</label>
-                          <input type="checkbox" checked={!!f.value} onChange={(e) => setOptions(p => ({ ...p, [f.key]: e.target.checked }))}
-                            className="rounded-sm bg-black border-zinc-800 text-green-500 focus:ring-0" />
-                        </div>
-                      ))}
+                      <div className="mt-2">
+                        <label className="block text-[10px] text-text-muted mb-2 uppercase tracking-wider font-bold">Animation LUT</label>
+                        <select
+                          value={activeLayer.transform.lut || 'none'}
+                          onChange={(e) => updateLayerTransform(activeLayer.id, { lut: e.target.value as any })}
+                          className="w-full bg-black border border-border rounded px-2 py-1 text-[10px] text-text-primary focus:outline-none focus:border-border-hover"
+                        >
+                          <option value="none">None</option>
+                          <option value="spectrum">Spectrum (RGB Cycle)</option>
+                          <option value="pulse">Pulse (Brightness)</option>
+                          <option value="flicker">Flicker (Opacity)</option>
+                          <option value="glitch">Glitch (Red/Blue)</option>
+                          <option value="thermal">Thermal (Invert+Hue)</option>
+                          <option value="noir">Noir (Grayscale)</option>
+                          <option value="cyber">Cyber (Neon Glow)</option>
+                        </select>
+                      </div>
+
+                      <div className="flex gap-2 mt-2">
+                        <button
+                          onClick={() => updateLayerTransform(activeLayer.id, { flipX: !activeLayer.transform.flipX })}
+                          className={clsx(
+                            "flex-1 py-1.5 text-[9px] uppercase font-bold rounded border transition-colors",
+                            activeLayer.transform.flipX
+                              ? 'bg-surface-active border-text-secondary text-text-primary'
+                              : 'border-border text-text-muted hover:text-text-primary'
+                          )}
+                        >
+                          Flip H
+                        </button>
+                        <button
+                          onClick={() => updateLayerTransform(activeLayer.id, { flipY: !activeLayer.transform.flipY })}
+                          className={clsx(
+                            "flex-1 py-1.5 text-[9px] uppercase font-bold rounded border transition-colors",
+                            activeLayer.transform.flipY
+                              ? 'bg-surface-active border-text-secondary text-text-primary'
+                              : 'border-border text-text-muted hover:text-text-primary'
+                          )}
+                        >
+                          Flip V
+                        </button>
+                      </div>
+
+                      {/* AUDIO BINDING UI - MOVED OUT */}
+                    </div>
+                  </div>
+                </Card>
+              </motion.div>
+
+              {/* AUDIO CONTROL */}
+              <motion.div variants={item}>
+                <Card className="space-y-4 card-hover-animation">
+                  <h3 className="text-xs font-bold text-zinc-500 uppercase tracking-widest">Audio Source</h3>
+                  <AudioControlPanel analyzer={audioAnalyzer} />
+
+                  {/* Audio React Bindings - kept here or in transform? User put Audio before Effects, so maybe Audio Control + Reactivity belong here? */}
+                  {/* Actually, user said "Transform, Audio, Effects". Binding is usually part of transform, but let's duplicate or move the binding UI here? */}
+                  {/* No, the binding UI needs to be with the properties it controls OR standalone. */}
+                  {/* The previous UI had binding IN Transform. I'll keep binding in Transform but move the Audio *Source* card to after Transform. */}
+
+                  {/* Re-adding Audio Bindings here for clarity if requested? No, user just said "Audio" card. */}
+                  {/* But wait, "Link Audio Data" is effectively configuring the layer's reactivity. */}
+                  {/* I will keep the binding controls inside the Transform card (as they relate to scale/opacity) but ensure the Layer Reactivity Toggle is prominent. */}
+
+                  {/* Let's actually put the Audio REACTIVITY settings (Source selection, Strength, Target) here in the AUDIO card? */}
+                  {/* That makes a lot of sense. The "Audio" card handles Source (Mic) AND Reactivity Config. */}
+                  {/* Moving the Audio Reactivity UI from Transform to here. */}
+
+                  <div className="mt-4 pt-4 border-t border-zinc-900/50">
+                    <div className="flex justify-between items-center mb-3">
+                      <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Audio Reactivity</label>
+                      <input
+                        type="checkbox"
+                        checked={activeLayer.transform.audioReact?.enabled ?? false}
+                        onChange={(e) => updateLayerTransform(activeLayer.id, {
+                          audioReact: { ...activeLayer.transform.audioReact!, enabled: e.target.checked }
+                        } as any)}
+                        className="w-3 h-3 accent-green-500 cursor-pointer"
+                      />
                     </div>
 
-                    <div className="space-y-4 border-t border-zinc-900 pt-5">
-                      <Slider label="Film Grain" value={noise || 0} min={0} max={100} step={5} onChange={(v) => setOptions(p => ({ ...p, noise: v }))} valueDisplay={noise > 0 ? noise.toString() : 'Off'} />
-                      <Slider label="Blur Radius" value={blur || 0} min={0} max={5} step={0.5} onChange={(v) => setOptions(p => ({ ...p, blur: v }))} valueDisplay={blur > 0 ? blur.toFixed(1) : 'Off'} />
-                      <Slider label="Posterize" value={posterize || 0} min={0} max={8} step={1} onChange={(v) => setOptions(p => ({ ...p, posterize: v }))} valueDisplay={posterize < 2 ? 'Off' : `${posterize} levels`} />
-                    </div>
-
-                    {removeBackground && (
-                      <div className="space-y-3 p-3 bg-zinc-900/30 rounded-lg border border-zinc-800/50">
-                        <label className="block text-[10px] text-zinc-600 uppercase font-bold tracking-widest">BG Threshold</label>
-                        <div className="flex gap-3">
-                          <input type="color" value={transparentColor} onChange={(e) => setOptions(p => ({ ...p, transparentColor: e.target.value }))}
-                            className="w-8 h-8 bg-zinc-900 border border-zinc-700 rounded-lg cursor-pointer" />
-                          <div className="flex-1">
-                            <Slider label="Sensitivity" value={colorTolerance || 30} min={1} max={200} onChange={(v) => setOptions(p => ({ ...p, colorTolerance: v }))} valueDisplay={colorTolerance.toString()} />
+                    {activeLayer.transform.audioReact?.enabled && (
+                      <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
+                        <div className="grid grid-cols-2 gap-2">
+                          <div>
+                            <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Source</label>
+                            <select
+                              value={activeLayer.transform.audioReact.source}
+                              onChange={(e) => updateLayerTransform(activeLayer.id, {
+                                audioReact: { ...activeLayer.transform.audioReact!, source: e.target.value as any }
+                              } as any)}
+                              className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
+                            >
+                              <option value="bass">Bass</option>
+                              <option value="mid">Mid</option>
+                              <option value="treble">Treble</option>
+                              <option value="volume">Volume</option>
+                            </select>
+                          </div>
+                          <div>
+                            <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Target</label>
+                            <select
+                              value={activeLayer.transform.audioReact.target}
+                              onChange={(e) => updateLayerTransform(activeLayer.id, {
+                                audioReact: { ...activeLayer.transform.audioReact!, target: e.target.value as any }
+                              } as any)}
+                              className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
+                            >
+                              <option value="scale">Scale</option>
+                              <option value="opacity">Opacity</option>
+                              <option value="rotation">Rotation</option>
+                              <option value="distortion">Distortion (Glitch)</option>
+                              <option value="hue">Hue Shift</option>
+                              <option value="rgb-split">RGB Split (Chromatic)</option>
+                            </select>
                           </div>
                         </div>
+
+                        <div className="space-y-1">
+                          <div className="flex justify-between text-[9px]">
+                            <span className="text-zinc-600 uppercase">Strength</span>
+                            <span className="text-zinc-400">{(activeLayer.transform.audioReact.strength * 100).toFixed(0)}%</span>
+                          </div>
+                          <input
+                            type="range"
+                            min="0"
+                            max="2"
+                            step="0.05"
+                            value={activeLayer.transform.audioReact.strength}
+                            onChange={(e) => updateLayerTransform(activeLayer.id, {
+                              audioReact: { ...activeLayer.transform.audioReact!, strength: parseFloat(e.target.value) }
+                            } as any)}
+                            className="w-full h-1 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-green-500"
+                          />
+                        </div>
+
+                        <button
+                          onClick={() => updateLayerTransform(activeLayer.id, {
+                            audioReact: { ...activeLayer.transform.audioReact!, invert: !activeLayer.transform.audioReact?.invert }
+                          } as any)}
+                          className={`w-full py-1 text-[8px] uppercase font-bold rounded border ${activeLayer.transform.audioReact.invert ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-600'}`}
+                        >
+                          Invert Signal
+                        </button>
                       </div>
                     )}
                   </div>
-                )}
-              </Card>
-            </div>
-          </div>
+                </Card>
+              </motion.div>
+
+              {/* SECTION 4: EFFECTS */}
+              <motion.div variants={item}>
+                <Card className="p-0 overflow-hidden card-hover-animation">
+                  <button onClick={() => setShowEffects(!showEffects)}
+                    className="w-full px-5 py-4 flex items-center justify-between text-text-muted hover:text-text-primary transition-colors bg-surface-active/20">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold uppercase tracking-widest">4. Effects & Filters</span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-surface-active text-[8px] font-mono text-text-secondary">ADVANCED</span>
+                    </div>
+                    <span className="text-xs">{showEffects ? '▲' : '▼'}</span>
+                  </button>
+
+                  {showEffects && (
+                    <div className="p-5 space-y-5 border-t border-border">
+                      <div>
+                        <label className="block text-[10px] text-text-muted mb-2 font-mono uppercase font-bold">Custom Character Set</label>
+                        <input type="text" value={charset} onChange={(e) => setOptions(p => ({ ...p, charset: e.target.value }))}
+                          className="w-full bg-black border border-border rounded px-3 py-2 text-[10px] font-mono text-text-primary focus:border-accent-success/50 focus:outline-none transition-all" />
+                        <div className="flex gap-1.5 flex-wrap mt-2">
+                          <button onClick={() => setOptions(p => ({ ...p, charset: DEFAULT_CHARSET }))} className="text-[9px] px-1.5 py-0.5 border border-border rounded hover:border-border-hover text-text-muted hover:text-text-primary">STD</button>
+                          <button onClick={() => setOptions(p => ({ ...p, charset: DENSE_CHARSET }))} className="text-[9px] px-1.5 py-0.5 border border-border rounded hover:border-border-hover text-text-muted hover:text-text-primary">DENSE</button>
+                          <button onClick={() => setOptions(p => ({ ...p, charset: MATRIX_CHARSET }))} className="text-[9px] px-1.5 py-0.5 border border-border rounded hover:border-border-hover text-text-muted hover:text-text-primary">BINARY</button>
+                        </div>
+                      </div>
+
+                      <div className="grid grid-cols-1 gap-2 border-t border-border pt-5">
+                        {[
+                          { label: 'Invert Lighting', value: inverted, key: 'inverted' as const },
+                          { label: 'Sharpen Detail', value: sharpen, key: 'sharpen' as const },
+                          { label: 'Adaptive Contrast', value: clahe, key: 'clahe' as const },
+                          { label: 'Luminance Dither', value: dither, key: 'dither' as const },
+                          { label: 'Isolate Motion', value: frameDiff, key: 'frameDiff' as const, hidden: !((activeLayer.file?.type.startsWith('video/') || activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif'))) },
+                          { label: 'Remove BG', value: removeBackground, key: 'removeBackground' as const },
+                        ].map(f => !f.hidden && (
+                          <div key={f.label} className="flex items-center justify-between">
+                            <label className="text-[10px] text-text-muted uppercase tracking-tight">{f.label}</label>
+                            <input type="checkbox" checked={!!f.value} onChange={(e) => setOptions(p => ({ ...p, [f.key]: e.target.checked }))}
+                              className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
+                          </div>
+                        ))}
+                      </div>
+
+                      <div className="space-y-4 border-t border-border pt-5">
+                        <Slider label="Film Grain" value={noise || 0} min={0} max={100} step={5} onChange={(v) => setOptions(p => ({ ...p, noise: v }))} valueDisplay={noise > 0 ? noise.toString() : 'Off'} />
+                        <Slider label="Blur Radius" value={blur || 0} min={0} max={5} step={0.5} onChange={(v) => setOptions(p => ({ ...p, blur: v }))} valueDisplay={blur > 0 ? blur.toFixed(1) : 'Off'} />
+                        <Slider label="Posterize" value={posterize || 0} min={0} max={8} step={1} onChange={(v) => setOptions(p => ({ ...p, posterize: v }))} valueDisplay={posterize < 2 ? 'Off' : `${posterize} levels`} />
+                      </div>
+
+                      {removeBackground && (
+                        <div className="space-y-3 p-3 bg-surface/30 rounded-lg border border-border/50">
+                          <label className="block text-[10px] text-text-muted uppercase font-bold tracking-widest">BG Threshold</label>
+                          <div className="flex gap-3">
+                            <input type="color" value={transparentColor} onChange={(e) => setOptions(p => ({ ...p, transparentColor: e.target.value }))}
+                              className="w-8 h-8 bg-surface border border-border rounded-lg cursor-pointer" />
+                            <div className="flex-1">
+                              <Slider label="Sensitivity" value={colorTolerance || 30} min={1} max={200} onChange={(v) => setOptions(p => ({ ...p, colorTolerance: v }))} valueDisplay={colorTolerance.toString()} />
+                            </div>
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )}
+                </Card>
+              </motion.div>
+            </motion.div>
+          </motion.div>
+
 
           {/* ─── Preview Panel ─── */}
-          <div className="lg:col-span-8 flex flex-col gap-4">
-            <Card className="relative flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[500px] card-hover-animation" ref={compositionRef}>
-              <div ref={canvasRef} className="relative flex-1 bg-[#111] overflow-hidden">
-                {/* Composition Canvas */}
-                <CompositionCanvas
-                  layers={layers}
-                  activeLayerId={activeLayerId}
-                  onSelectLayer={setActiveLayerId}
-                  onUpdateTransform={(id, t) => updateLayerTransform(id, t)}
-                  width={800} height={600} scale={1}
-                  globalFrameCount={globalFrameCount}
-                  audioMetrics={audioMetrics}
-                />
-              </div>
-
-              {/* Title Bar */}
-              <div className="absolute top-0 left-0 right-0 flex justify-between items-center px-4 py-2.5 bg-zinc-900/80 backdrop-blur border-b border-zinc-800 z-50 transition-opacity duration-300">
+          <motion.div variants={item} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }} className="lg:col-span-8 flex flex-col gap-4">
+            <Card className="relative flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[500px] card-hover-animation">
+              {/* Title Bar - Moved to static position to avoid overlap with capture region */}
+              <div className="flex justify-between items-center px-4 py-2.5 bg-surface border-b border-border transition-opacity duration-300">
                 <div className="flex gap-1.5">
-                  <div className="w-2.5 h-2.5 rounded-full bg-red-500/40" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-accent-danger/40" />
                   <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/40" />
-                  <div className="w-2.5 h-2.5 rounded-full bg-green-500/40" />
+                  <div className="w-2.5 h-2.5 rounded-full bg-accent-success/40" />
                 </div>
-                <div className="flex items-center gap-4">
+              </div>
+              <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-start pointer-events-none">
+                <div className="flex gap-2 pointer-events-auto">
+                  <div className="flex gap-1.5 bg-black/50 backdrop-blur-md p-1.5 rounded-lg border border-white/10">
+                    <div className="w-3 h-3 rounded-full bg-red-500/80" />
+                    <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
+                    <div className="w-3 h-3 rounded-full bg-green-500/80" />
+                  </div>
+                </div>
+
+                <div className="flex gap-3 pointer-events-auto">
+                  {/* History Controls */}
+                  <div className="flex gap-1 mr-4 bg-black/50 backdrop-blur-md p-1 rounded-lg border border-white/10">
+                    <button onClick={undo} disabled={!canUndo} className="p-1.5 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors">
+                      <Undo2 className="w-4 h-4" />
+                    </button>
+                    <button onClick={redo} disabled={!canRedo} className="p-1.5 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors">
+                      <Redo2 className="w-4 h-4" />
+                    </button>
+                  </div>
+
                   {/* Recording Indicator */}
                   {isRecording && (
-                    <div className="flex items-center gap-2 text-red-500 animate-pulse">
-                      <div className="w-2 h-2 rounded-full bg-red-500" />
+                    <div className="flex items-center gap-2 text-accent-danger animate-pulse bg-black/50 backdrop-blur-md px-3 py-1 rounded border border-accent-danger/30">
+                      <div className="w-2 h-2 rounded-full bg-accent-danger" />
                       <span className="text-[10px] uppercase font-bold tracking-widest">
                         REC {Math.floor(recordingTime / 60)}:{String(recordingTime % 60).padStart(2, '0')}
                       </span>
                     </div>
                   )}
-                  <div className="text-[10px] text-zinc-600 font-mono uppercase tracking-widest">
+
+                  <div className="text-[10px] font-mono text-zinc-500 bg-black/50 backdrop-blur-md px-2 py-1 rounded border border-white/10">
                     COMPOSITION PREVIEW
                   </div>
                 </div>
-                <div className="flex items-center gap-2">
+
+                <div className="flex gap-2 pointer-events-auto">
                   <Button
                     variant="ghost"
                     size="sm"
-                    className={`h-6 w-6 p-0 hover:bg-zinc-800 ${isRecording ? 'text-red-500 bg-red-500/10 hover:bg-red-500/20' : 'text-zinc-400'}`}
+                    className={clsx(
+                      "h-6 w-6 p-0 hover:bg-surface-active",
+                      isRecording ? 'text-accent-danger bg-accent-danger/10 hover:bg-accent-danger/20' : 'text-text-muted'
+                    )}
                     onClick={isRecording ? stopRecording : startRecording}
                     title={isRecording ? "Stop Recording" : "Record Screen (Video)"}
                   >
-                    <div className={`w-2.5 h-2.5 rounded-full ${isRecording ? 'bg-current' : 'border-2 border-current'}`} />
+                    <div className={clsx("w-2.5 h-2.5 rounded-full", isRecording ? 'bg-current' : 'border-2 border-current')} />
                   </Button>
+                  <div className="flex items-center gap-1 border-r border-border pr-2 mr-2">
+                    <Button variant="ghost" size="sm" onClick={undo} disabled={!canUndo} className="h-6 w-6 p-0 text-text-muted hover:text-text-primary" title="Undo (Ctrl+Z)">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" /></svg>
+                    </Button>
+                    <Button variant="ghost" size="sm" onClick={redo} disabled={!canRedo} className="h-6 w-6 p-0 text-text-muted hover:text-text-primary" title="Redo (Ctrl+Shift+Z)">
+                      <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 7v6h-6" /><path d="M3 17a9 9 0 0 1 9-9 9 9 0 0 1 6 2.3l3 3.7" /></svg>
+                    </Button>
+                  </div>
                   <Button
                     variant="ghost"
                     size="sm"
-                    onClick={() => setIsPlaying(!isPlaying)} className="h-6 w-6 p-0 text-zinc-500 hover:text-white" title={isPlaying ? "Pause Animation" : "Play Animation"}>
+                    onClick={() => setIsPlaying(!isPlaying)} className="h-6 w-6 p-0 text-text-muted hover:text-text-primary" title={isPlaying ? "Pause Animation" : "Play Animation"}>
                     {isPlaying ? (
                       <svg xmlns="http://www.w3.org/2000/svg" width="12" height="12" viewBox="0 0 24 24" fill="currentColor" stroke="none"><rect x="6" y="4" width="4" height="16" rx="1" /><rect x="14" y="4" width="4" height="16" rx="1" /></svg>
                     ) : (
@@ -1062,12 +1187,12 @@ function PlaygroundContent() {
                     )}
                   </Button>
 
-                  <div className="flex bg-zinc-800/50 rounded-md p-0.5 border border-zinc-700/50">
-                    <button onClick={downloadShareCard} className="px-2 py-0.5 text-[9px] text-zinc-300 hover:text-white hover:bg-zinc-700 rounded transition-colors" title="Export Composite as PNG">PNG</button>
-                    <div className="w-[1px] bg-zinc-700/50 my-0.5" />
-                    <button onClick={() => downloadMp4(false)} className="px-2 py-0.5 text-[9px] text-zinc-300 hover:text-white hover:bg-zinc-700 rounded transition-colors" title="Export Composite as MP4">MP4</button>
-                    <div className="w-[1px] bg-zinc-700/50 my-0.5" />
-                    <button onClick={downloadHtml} className="px-2 py-0.5 text-[9px] text-zinc-300 hover:text-white hover:bg-zinc-700 rounded transition-colors" title="Export Active Layer as HTML">HTML</button>
+                  <div className="flex bg-surface-active/50 rounded-md p-0.5 border border-border/50">
+                    <button onClick={downloadShareCard} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as PNG">PNG</button>
+                    <div className="w-[1px] bg-border/50 my-0.5" />
+                    <button onClick={() => downloadMp4(false)} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as MP4">MP4</button>
+                    <div className="w-[1px] bg-border/50 my-0.5" />
+                    <button onClick={downloadHtml} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Active Layer as HTML">HTML</button>
                   </div>
 
                   <Button size="sm" variant="secondary" onClick={() => setShowSaveModal(true)} className="text-[9px] h-6 px-2 ml-1">
@@ -1076,37 +1201,56 @@ function PlaygroundContent() {
                 </div>
               </div>
 
-
+              <div ref={compositionRef} className={clsx("relative flex-1 overflow-hidden", isRecording && "cursor-none")}
+                style={{ background: activeLayer?.options.bgTheme?.bg || '#111111' }}
+              >
+                {/* Composition Canvas */}
+                <CompositionCanvas
+                  layers={layers}
+                  activeLayerId={activeLayerId}
+                  onSelectLayer={setActiveLayerId}
+                  onUpdateTransform={(id, t) => updateLayerTransform(id, t)}
+                  onUpdateTransformEnd={(id, t) => commitLayerTransform(id, t)}
+                  width={800} height={600} scale={1}
+                  globalFrameCount={globalFrameCount}
+                  audioMetrics={audioMetrics}
+                  isRecording={isRecording}
+                />
+              </div>
 
             </Card>
-
-          </div>
+          </motion.div>
         </div>
       </main>
 
+      {/* Modals & Overlays */}
+      <PresetLibrary
+        isOpen={showPresetLibrary}
+        onClose={() => setShowPresetLibrary(false)}
+        onSelectPreset={handleApplyPreset}
+      />
+
       {/* Save Modal */}
-      {
-        showSaveModal && (
-          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
-            <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-xl w-full max-w-md shadow-2xl space-y-4">
-              <h3 className="text-lg font-bold text-white">Save to Library</h3>
-              <p className="text-sm text-zinc-400">Save this ASCII generation to your personal gallery.</p>
-              <input
-                type="text"
-                placeholder="Name your creation..."
-                value={saveName}
-                onChange={(e) => setSaveName(e.target.value)}
-                className="w-full bg-black border border-zinc-800 rounded px-4 py-3 text-white focus:border-green-500 focus:outline-none"
-                autoFocus
-              />
-              <div className="flex justify-end gap-3 pt-2">
-                <Button variant="ghost" onClick={() => setShowSaveModal(false)}>Cancel</Button>
-                <Button variant="primary" onClick={() => handleSaveToLibrary(saveName)} disabled={!saveName.trim()}>Save</Button>
-              </div>
+      {showSaveModal && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm">
+          <div className="bg-zinc-900 border border-zinc-800 p-6 rounded-xl w-full max-w-md shadow-2xl space-y-4">
+            <h3 className="text-lg font-bold text-white">Save to Library</h3>
+            <p className="text-sm text-zinc-400">Save this ASCII generation to your personal gallery.</p>
+            <input
+              type="text"
+              placeholder="Name your creation..."
+              value={saveName}
+              onChange={(e) => setSaveName(e.target.value)}
+              className="w-full bg-black border border-zinc-800 rounded px-4 py-3 text-white focus:border-green-500 focus:outline-none"
+              autoFocus
+            />
+            <div className="flex justify-end gap-3 pt-2">
+              <Button variant="ghost" onClick={() => setShowSaveModal(false)}>Cancel</Button>
+              <Button variant="primary" onClick={() => handleSaveToLibrary(saveName)} disabled={!saveName.trim()}>Save</Button>
             </div>
           </div>
-        )
-      }
-    </div >
+        </div>
+      )}
+    </div>
   );
 }

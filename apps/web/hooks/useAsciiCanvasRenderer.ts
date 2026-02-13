@@ -10,6 +10,7 @@ export interface UseAsciiCanvasRendererProps {
     height: number;
     globalFrameCount: number;
     audioMetrics?: { bass: number; mid: number; treble: number; volume: number };
+    backgroundColor?: string;
 }
 
 export function useAsciiCanvasRenderer({
@@ -17,7 +18,8 @@ export function useAsciiCanvasRenderer({
     width,
     height,
     globalFrameCount,
-    audioMetrics
+    audioMetrics,
+    backgroundColor = '#111111'
 }: UseAsciiCanvasRendererProps) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [stream, setStream] = useState<MediaStream | null>(null);
@@ -53,7 +55,7 @@ export function useAsciiCanvasRenderer({
         if (!ctx) return;
 
         // Clear Background
-        ctx.fillStyle = '#111111'; // Match playground background
+        ctx.fillStyle = backgroundColor;
         ctx.fillRect(0, 0, width, height);
 
         // Draw Layers
@@ -196,7 +198,7 @@ export function useAsciiCanvasRenderer({
             ctx.restore();
         });
 
-    }, [layers, width, height, globalFrameCount, audioMetrics]);
+    }, [layers, width, height, globalFrameCount, audioMetrics, backgroundColor]);
 
     return { stream, canvasRef };
 }

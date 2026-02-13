@@ -6,11 +6,13 @@ interface CompositionCanvasProps {
     activeLayerId: string | null;
     onSelectLayer: (id: string) => void;
     onUpdateTransform: (id: string, transform: { x: number; y: number }) => void;
+    onUpdateTransformEnd?: (id: string, transform: { x: number; y: number }) => void;
     width: number; // Container width
     height: number; // Container height
     scale: number; // Zoom scale
     globalFrameCount: number;
     audioMetrics?: { bass: number; mid: number; treble: number; volume: number };
+    isRecording?: boolean;
 }
 
 export function CompositionCanvas({
@@ -18,11 +20,13 @@ export function CompositionCanvas({
     activeLayerId,
     onSelectLayer,
     onUpdateTransform,
+    onUpdateTransformEnd,
     width,
     height,
     scale = 1,
     globalFrameCount = 0,
-    audioMetrics
+    audioMetrics,
+    isRecording = false
 }: CompositionCanvasProps) {
 
     const [isDragging, setIsDragging] = useState(false);
@@ -55,6 +59,9 @@ export function CompositionCanvas({
     }, [isDragging, onUpdateTransform, scale]);
 
     const handleMouseUp = () => {
+        if (isDragging && activeLayerRef.current && onUpdateTransformEnd) {
+            onUpdateTransformEnd(activeLayerRef.current.id, activeLayerRef.current.transform);
+        }
         setIsDragging(false);
         activeLayerRef.current = null;
     };
@@ -68,8 +75,17 @@ export function CompositionCanvas({
 
     return (
         <div
-            className="relative overflow-hidden select-none"
-            style={{ width: '100%', height: '100%', minHeight: '500px', cursor: isDragging ? 'grabbing' : 'default' }}
+            className={`relative overflow-hidden select-none ${isRecording ? '!cursor-none [&_*]:!cursor-none' : ''}`}
+            style={{
+                width: '100%',
+                height: '100%',
+                minHeight: '500px',
+                // Inline styles override classes, so we only set cursor inline if NOT recording
+                // Wait, if recording, CSS '!cursor-none' wins over inline? Yes with '!'
+                // But inline is specific. Let's ensure inline cursor IS default if not recording.
+                cursor: isRecording ? 'none' : (isDragging ? 'grabbing' : 'default')
+                // But wait, if isRecording is true, we force 'none' anyway?
+            }}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseUp}
@@ -131,7 +147,7 @@ export function CompositionCanvas({
                     <div key={layer.id} className="absolute w-full h-full pointer-events-none">
                         {svgFilter}
                         <div
-                            className={`absolute origin-center transition-transform select-none ${activeLayerId === layer.id ? 'z-10 outline outline-1 outline-blue-500/50 pointer-events-auto' : 'pointer-events-auto'} ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
+                            className={`absolute origin-center transition-transform select-none ${activeLayerId === layer.id ? 'z-10 outline outline-1 outline-accent-primary pointer-events-auto' : 'pointer-events-auto'} ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
                             style={{
                                 left: '50%',
                                 top: '50%',

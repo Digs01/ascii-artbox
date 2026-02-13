@@ -13,6 +13,7 @@ declare global {
 interface UseScreenRecorderProps {
     cropTargetRef?: React.RefObject<HTMLElement>;
     externalStream?: MediaStream | null; // For canvas recording
+    audioStream?: MediaStream | null; // For direct audio injection
 }
 
 interface UseScreenRecorderReturn {
@@ -23,7 +24,7 @@ interface UseScreenRecorderReturn {
     recordingError: string | null;
 }
 
-export function useScreenRecorder({ cropTargetRef, externalStream }: UseScreenRecorderProps = {}): UseScreenRecorderReturn {
+export function useScreenRecorder({ cropTargetRef, externalStream, audioStream }: UseScreenRecorderProps = {}): UseScreenRecorderReturn {
     const [isRecording, setIsRecording] = useState(false);
     const [recordingTime, setRecordingTime] = useState(0);
     const [recordingError, setRecordingError] = useState<string | null>(null);
@@ -57,7 +58,9 @@ export function useScreenRecorder({ cropTargetRef, externalStream }: UseScreenRe
                     },
                     // @ts-ignore
                     preferCurrentTab: true,
-                    selfBrowserSurface: 'include'
+                    selfBrowserSurface: 'include',
+                    // @ts-ignore
+                    cursor: "never"
                 };
 
                 stream = await navigator.mediaDevices.getDisplayMedia(displayMediaOptions);
@@ -76,7 +79,7 @@ export function useScreenRecorder({ cropTargetRef, externalStream }: UseScreenRe
                     return; // Return early instead of alert
                 }
 
-                if (cropTargetRef?.current && window.CropTarget) {
+                if (cropTargetRef?.current && (window as any).CropTarget) {
                     try {
                         // @ts-ignore
                         const cropTarget = await CropTarget.fromElement(cropTargetRef.current);
@@ -96,7 +99,7 @@ export function useScreenRecorder({ cropTargetRef, externalStream }: UseScreenRe
             const settings = track.getSettings();
 
             console.log("Region Capture Debug:", {
-                supported: !!window.CropTarget,
+                supported: !!(window as any).CropTarget,
                 ref: !!cropTargetRef?.current,
                 surface: settings.displaySurface
             });
@@ -109,13 +112,15 @@ export function useScreenRecorder({ cropTargetRef, externalStream }: UseScreenRe
             }
 
             // --- REGION CAPTURE IMPLEMENTATION ---
-            if (cropTargetRef?.current && window.CropTarget) {
+            if (cropTargetRef?.current && (window as any).CropTarget) {
                 try {
                     // Only attempt crop if we think it's possible (or just try anyway)
                     // Create a CropTarget from the DOM element
+                    // @ts-ignore
                     const cropTarget = await CropTarget.fromElement(cropTargetRef.current);
 
                     // Apply cropping to the video track
+                    // @ts-ignore
                     await track.cropTo(cropTarget);
 
                     console.log("Region Capture applied successfully.");
@@ -130,7 +135,7 @@ export function useScreenRecorder({ cropTargetRef, externalStream }: UseScreenRe
                     }
                 }
             } else {
-                if (!window.CropTarget) {
+                if (!(window as any).CropTarget) {
                     const msg = "Your browser does not support Region Capture (Auto-Crop). Please use latest Chrome/Edge.";
                     alert(msg);
                     setRecordingError(msg);
@@ -145,11 +150,22 @@ export function useScreenRecorder({ cropTargetRef, externalStream }: UseScreenRe
                 stopRecording();
             };
 
+            // Combine video from screen/canvas with audio from audioStream if available
+            let recordingStream = stream;
+            if (audioStream && audioStream.getAudioTracks().length > 0) {
+                const audioTracks = audioStream.getAudioTracks();
+                const videoTracks = stream.getVideoTracks();
+
+                // Create a new stream mixing both
+                recordingStream = new MediaStream([...videoTracks, ...audioTracks]);
+                console.log("Audio tracks mixed into recording stream:", audioTracks.length);
+            }
+
             const mimeType = MediaRecorder.isTypeSupported('video/webm; codecs=vp9')
                 ? 'video/webm; codecs=vp9'
                 : 'video/webm';
 
-            const mediaRecorder = new MediaRecorder(stream, {
+            const mediaRecorder = new MediaRecorder(recordingStream, {
                 mimeType,
                 videoBitsPerSecond: 8000000 // 8 Mbps high quality
             });
@@ -204,7 +220,7 @@ export function useScreenRecorder({ cropTargetRef, externalStream }: UseScreenRe
             setRecordingError("Failed to start recording: " + err);
             setIsRecording(false);
         }
-    }, [cropTargetRef, externalStream]);
+    }, [cropTargetRef, externalStream, audioStream]);
 
     const stopRecording = useCallback(() => {
         if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {

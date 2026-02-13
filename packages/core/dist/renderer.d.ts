@@ -14,3 +14,27 @@ export declare function renderAsciiFrameToBuffer(text: string, options?: RenderO
  * The caller is responsible for deleting the file after use.
  */
 export declare function createAsciiVideo(frames: string[], fps: number, options?: RenderOptions): Promise<string>;
+export interface LayerData {
+    frames: string[];
+    fps: number;
+    options: RenderOptions;
+    transform: {
+        x: number;
+        y: number;
+        scale: number;
+        rotation: number;
+        opacity: number;
+        flipX?: boolean;
+        flipY?: boolean;
+        blendMode: string;
+    };
+    width: number;
+}
+export interface CompositeVideoOptions {
+    width: number;
+    height: number;
+    backgroundColor: string;
+    duration?: number;
+    fps?: number;
+}
+export declare function createCompositeAsciiVideo(layers: LayerData[], options: CompositeVideoOptions): Promise<string>;

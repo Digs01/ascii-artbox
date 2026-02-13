@@ -66,14 +66,14 @@ export function AudioControlPanel({ analyzer }: AudioControlPanelProps) {
     }, [isListening, getAudioMetrics]);
 
     return (
-        <Card className="p-0 overflow-hidden card-hover-animation border-green-900/40">
-            <div className="bg-zinc-900/50 px-4 py-2 border-b border-zinc-800 flex justify-between items-center">
-                <h3 className="text-xs font-bold text-green-500 uppercase tracking-widest flex items-center gap-2">
-                    <span className="w-2 h-2 rounded-full bg-green-500 animate-pulse" />
+        <Card className="p-0 overflow-hidden card-hover-animation border-accent-success/40">
+            <div className="bg-surface/50 px-4 py-2 border-b border-border flex justify-between items-center">
+                <h3 className="text-xs font-bold text-accent-success uppercase tracking-widest flex items-center gap-2">
+                    <span className="w-2 h-2 rounded-full bg-accent-success animate-pulse" />
                     Audio Reactive
                 </h3>
                 {isListening && (
-                    <button onClick={stopAudio} className="text-[10px] text-red-400 hover:text-red-300">STOP</button>
+                    <button onClick={stopAudio} className="text-[10px] text-accent-danger hover:text-red-300">STOP</button>
                 )}
             </div>
 
@@ -82,10 +82,10 @@ export function AudioControlPanel({ analyzer }: AudioControlPanelProps) {
                     <div className="grid grid-cols-2 gap-3">
                         <button
                             onClick={startMic}
-                            className="flex flex-col items-center justify-center p-3 rounded bg-zinc-900 hover:bg-zinc-800 border border-zinc-800 transition-colors"
+                            className="flex flex-col items-center justify-center p-3 rounded bg-surface hover:bg-surface-hover border border-border transition-colors group"
                         >
-                            <span className="text-xl mb-1">🎤</span>
-                            <span className="text-[10px] font-bold">MICROPHONE</span>
+                            <span className="text-xl mb-1 group-hover:scale-110 transition-transform">🎤</span>
+                            <span className="text-[10px] font-bold text-text-primary">MICROPHONE</span>
                         </button>
 
                         <div className="relative overflow-hidden group">
@@ -97,16 +97,16 @@ export function AudioControlPanel({ analyzer }: AudioControlPanelProps) {
                                 }}
                                 className="absolute inset-0 opacity-0 cursor-pointer z-10"
                             />
-                            <button className="w-full h-full flex flex-col items-center justify-center p-3 rounded bg-zinc-900 group-hover:bg-zinc-800 border border-zinc-800 transition-colors">
-                                <span className="text-xl mb-1">🎵</span>
-                                <span className="text-[10px] font-bold">UPLOAD FILE</span>
+                            <button className="w-full h-full flex flex-col items-center justify-center p-3 rounded bg-surface group-hover:bg-surface-hover border border-border transition-colors">
+                                <span className="text-xl mb-1 group-hover:scale-110 transition-transform">🎵</span>
+                                <span className="text-[10px] font-bold text-text-primary">UPLOAD FILE</span>
                             </button>
                         </div>
                     </div>
                 ) : (
                     <div>
-                        <canvas ref={canvasRef} width={200} height={60} className="w-full h-[60px] bg-black/50 rounded border border-zinc-800" />
-                        <div className="text-[10px] text-zinc-500 text-center mt-2 font-mono">
+                        <canvas ref={canvasRef} width={200} height={60} className="w-full h-[60px] bg-black/50 rounded border border-border" />
+                        <div className="text-[10px] text-text-muted text-center mt-2 font-mono">
                             LISTENING: {sourceType.toUpperCase()}
                         </div>
                     </div>

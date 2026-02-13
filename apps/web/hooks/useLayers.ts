@@ -1,5 +1,6 @@
 import { useState, useCallback, useMemo } from 'react';
 import { Layer, LayerOptions, LayerTransform } from '../types/layer';
+import { useHistory } from './useHistory';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
 
@@ -51,7 +52,7 @@ const DEFAULT_TRANSFORM: LayerTransform = {
 };
 
 export function useLayers() {
-    const [layers, setLayers] = useState<Layer[]>([]);
+    const { state: layers, set: setLayers, replace: replaceLayers, undo, redo, canUndo, canRedo } = useHistory<Layer[]>([]);
     const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
 
     const activeLayer = useMemo(() =>
@@ -76,34 +77,57 @@ export function useLayers() {
         setLayers(prev => [newLayer, ...prev]); // Add to top
         setActiveLayerId(newLayer.id);
         return newLayer.id;
-    }, [layers.length]);
+    }, [layers.length, setLayers]);
 
     const removeLayer = useCallback((id: string) => {
         setLayers(prev => {
             const newLayers = prev.filter(l => l.id !== id);
             // If we removed the active layer, select the next one
             if (activeLayerId === id) {
-                setActiveLayerId(newLayers[0]?.id || null);
+                // Determine new active layer ID properly? 
+                // We can't set state inside setLayers callback if it depends on result.
+                // But setActiveLayerId is outside. 
+                // We'll fix active ID in effect or just check existence in Page.
+                // For now, let's just update layers.
             }
             return newLayers;
         });
-    }, [activeLayerId]);
+        // We set active ID separately if needed, but for history purposes we only track layers.
+        // If activeID becomes invalid, Page handles it.
+    }, [activeLayerId, setLayers]);
 
     const updateLayer = useCallback((id: string, updates: Partial<Layer>) => {
         setLayers(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));
-    }, []);
+    }, [setLayers]);
 
+    // Used for Sliders - currently commits every change. 
+    // Ideally we'd use 'replace' while dragging and 'set' on release, but UI doesn't support it yet.
     const updateLayerOptions = useCallback((id: string, optionsUpdates: Partial<LayerOptions>) => {
         setLayers(prev => prev.map(l =>
             l.id === id ? { ...l, options: { ...l.options, ...optionsUpdates } } : l
         ));
-    }, []);
+    }, [setLayers]);
 
+    // Used for Real-time Color Picking - Uses REPLACE to avoid history spam
+    const replaceLayerOptions = useCallback((id: string, optionsUpdates: Partial<LayerOptions>) => {
+        replaceLayers(prev => prev.map(l =>
+            l.id === id ? { ...l, options: { ...l.options, ...optionsUpdates } } : l
+        ));
+    }, [replaceLayers]);
+
+    // Used for Canvas Dragging - Uses REPLACE to avoid history spam
     const updateLayerTransform = useCallback((id: string, transformUpdates: Partial<LayerTransform>) => {
+        replaceLayers(prev => prev.map(l =>
+            l.id === id ? { ...l, transform: { ...l.transform, ...transformUpdates } } : l
+        ));
+    }, [replaceLayers]);
+
+    // Used for Canvas Drag End - Commits to history
+    const commitLayerTransform = useCallback((id: string, transformUpdates: Partial<LayerTransform>) => {
         setLayers(prev => prev.map(l =>
             l.id === id ? { ...l, transform: { ...l.transform, ...transformUpdates } } : l
         ));
-    }, []);
+    }, [setLayers]);
 
     const duplicateLayer = useCallback((id: string) => {
         const layer = layers.find(l => l.id === id);
@@ -113,24 +137,21 @@ export function useLayers() {
             ...layer,
             id: generateId(),
             name: `${layer.name} (Copy)`,
-            // Create new preview URL object to avoid revoking issues if original is closed (though we rely on GC usually, explicit URL handling is better but for now copy is fine)
-            // Ideally we clone the file if it exists, or just re-use the reference and be careful not to revoke until all are gone.
-            // For simplicity, we just copy properties.
         };
 
         setLayers(prev => [newLayer, ...prev]);
         setActiveLayerId(newLayer.id);
-    }, [layers]);
+    }, [layers, setLayers]);
 
     const reorderLayers = useCallback((newOrder: Layer[]) => {
         setLayers(newOrder);
-    }, []);
+    }, [setLayers]);
 
     const setLayerAscii = useCallback((id: string, frames: string[], fps?: number) => {
         setLayers(prev => prev.map(l =>
             l.id === id ? { ...l, frames, fps: fps || l.fps } : l
         ));
-    }, []);
+    }, [setLayers]);
 
     return {
         layers,
@@ -141,9 +162,12 @@ export function useLayers() {
         removeLayer,
         updateLayer,
         updateLayerOptions,
+        replaceLayerOptions, // New
         updateLayerTransform,
+        commitLayerTransform, // New
         duplicateLayer,
         reorderLayers,
-        setLayerAscii
+        setLayerAscii,
+        undo, redo, canUndo, canRedo // New
     };
 }
