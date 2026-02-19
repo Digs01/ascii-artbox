@@ -147,7 +147,7 @@ export function CompositionCanvas({
                     <div key={layer.id} className="absolute w-full h-full pointer-events-none">
                         {svgFilter}
                         <div
-                            className={`absolute origin-center transition-transform select-none ${activeLayerId === layer.id ? 'z-10 outline outline-1 outline-accent-primary pointer-events-auto' : 'pointer-events-auto'} ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
+                            className={`absolute origin-center transition-transform select-none ${activeLayerId === layer.id ? 'z-10 pointer-events-auto' : 'pointer-events-auto'} ${activeLayerId === layer.id && activeFrame ? 'outline outline-1 outline-accent-primary' : ''} ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
                             style={{
                                 left: '50%',
                                 top: '50%',

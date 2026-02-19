@@ -1112,14 +1112,6 @@ function PlaygroundContent() {
           {/* ─── Preview Panel ─── */}
           <motion.div variants={item} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }} className="lg:col-span-8 flex flex-col gap-4">
             <Card className="relative flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[500px] card-hover-animation">
-              {/* Title Bar - Moved to static position to avoid overlap with capture region */}
-              <div className="flex justify-between items-center px-4 py-2.5 bg-surface border-b border-border transition-opacity duration-300">
-                <div className="flex gap-1.5">
-                  <div className="w-2.5 h-2.5 rounded-full bg-accent-danger/40" />
-                  <div className="w-2.5 h-2.5 rounded-full bg-yellow-500/40" />
-                  <div className="w-2.5 h-2.5 rounded-full bg-accent-success/40" />
-                </div>
-              </div>
               <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-start pointer-events-none">
                 <div className="flex gap-2 pointer-events-auto">
                   <div className="flex gap-1.5 bg-black/50 backdrop-blur-md p-1.5 rounded-lg border border-white/10">
@@ -1130,16 +1122,6 @@ function PlaygroundContent() {
                 </div>
 
                 <div className="flex gap-3 pointer-events-auto">
-                  {/* History Controls */}
-                  <div className="flex gap-1 mr-4 bg-black/50 backdrop-blur-md p-1 rounded-lg border border-white/10">
-                    <button onClick={undo} disabled={!canUndo} className="p-1.5 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors">
-                      <Undo2 className="w-4 h-4" />
-                    </button>
-                    <button onClick={redo} disabled={!canRedo} className="p-1.5 text-zinc-400 hover:text-white disabled:opacity-30 transition-colors">
-                      <Redo2 className="w-4 h-4" />
-                    </button>
-                  </div>
-
                   {/* Recording Indicator */}
                   {isRecording && (
                     <div className="flex items-center gap-2 text-accent-danger animate-pulse bg-black/50 backdrop-blur-md px-3 py-1 rounded border border-accent-danger/30">
