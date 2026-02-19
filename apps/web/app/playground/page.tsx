@@ -11,6 +11,7 @@ import { Nav } from '../../components/ui/Nav';
 import { ToastProvider, useToast } from '../../components/ui/ToastContext';
 import { useLayers } from '../../hooks/useLayers';
 import { LayerManager } from '../../components/playground/LayerManager';
+import { Timeline } from '../../components/playground/Timeline';
 import { PresetLibrary } from '../../components/playground/PresetLibrary';
 import { PRESETS, Preset } from '../../config/presets';
 
@@ -92,8 +93,9 @@ function PlaygroundContent() {
   } = useLayers();
 
   // Animation State
-  const [isPlaying, setIsPlaying] = useState(true);
+  const [isPlaying, setIsPlaying] = useState(false);
   const [globalFrameCount, setGlobalFrameCount] = useState(0);
+  const [projectDuration, setProjectDuration] = useState(120); // 10 seconds @ 12fps
   const animationRef = useRef<number>();
   // Audio State
   const audioAnalyzer = useAudioAnalyzer();
@@ -148,6 +150,7 @@ function PlaygroundContent() {
   // Screen Recorder
   const { isRecording, startRecording, stopRecording, recordingTime, recordingError } = useScreenRecorder({
     cropTargetRef: compositionRef,
+    externalStream: canvasStream, // Direct Canvas Recording
     audioStream: outputStream
   });
 
@@ -179,7 +182,7 @@ function PlaygroundContent() {
 
       // Update ASCII Frame Count
       if (delta >= interval) {
-        setGlobalFrameCount(c => c + 1);
+        setGlobalFrameCount(c => (c + 1) % projectDuration); // Loop
         lastTime = now;
       }
 
@@ -224,7 +227,7 @@ function PlaygroundContent() {
   // Helper to safely update options
   const setOptions = (updater: (prev: LayerOptions) => LayerOptions) => {
     if (!activeLayerId || !activeLayer) return;
-    const newOptions = updater(activeLayer.options);
+    const newOptions = updater(activeLayer.options || {} as any);
     updateLayerOptions(activeLayerId, newOptions);
   };
 
@@ -333,8 +336,8 @@ function PlaygroundContent() {
     }
 
     // Check for video or gif
-    const isGif = activeLayer.file.type === 'image/gif' || activeLayer.file.name.toLowerCase().endsWith('.gif');
-    const isVideo = activeLayer.file.type.startsWith('video/') || isGif;
+    const isGif = activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif');
+    const isVideo = activeLayer.file?.type.startsWith('video/') || isGif;
     if (isVideo) {
       formData.append('fps', videoFps.toString());
       if (frameDiff) formData.append('frameDiff', 'true');
@@ -350,7 +353,7 @@ function PlaygroundContent() {
       setProgress(100);
 
       let newFrames: string[] = [];
-      let newFps = activeLayer.fps;
+      let newFps = activeLayer?.fps || 12;
 
       if (data.frames) {
         newFrames = data.frames;
@@ -359,7 +362,9 @@ function PlaygroundContent() {
         newFrames = [data.ascii];
       }
 
-      setLayerAscii(activeLayer.id, newFrames, newFps);
+      if (activeLayer) {
+        setLayerAscii(activeLayer.id, newFrames, newFps);
+      }
 
     } catch (err: any) {
       console.error(err);
@@ -383,18 +388,21 @@ function PlaygroundContent() {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
-            frames: activeLayer.frames,
-            fps: isVideo ? videoFps : (activeLayer.frames.length > 1 ? 5 : 1),
+            frames: activeLayer?.frames || [],
+            fps: isVideo ? videoFps : ((activeLayer?.frames?.length || 0) > 1 ? 5 : 1),
             fontSize,
-            lineHeight: fontSize + 2,
+            lineHeight: (fontSize || 8) + 2,
             color,
-            backgroundColor: bgTheme.bg === 'transparent' ? '#000000' : bgTheme.bg
+            backgroundColor: bgTheme?.bg === 'transparent' ? '#000000' : (bgTheme?.bg || '#000000')
           })
         });
         if (!response.ok) throw new Error((await response.json()).error);
         const blob = await response.blob();
         const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url; a.download = `ascii-${activeLayer.name}.mp4`; a.click();
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `ascii-${activeLayer?.name || 'export'}.mp4`;
+        a.click();
         return;
       }
 
@@ -462,19 +470,21 @@ function PlaygroundContent() {
   };
 
   const copyToClipboard = () => {
-    if (!activeLayer || activeLayer.frames.length === 0) return;
-    const text = activeLayer.frames.join('\n\n--- FRAME BREAK ---\n\n');
+    if (!activeLayer || (activeLayer.frames?.length || 0) === 0) return;
+    const text = (activeLayer.frames || []).join('\n\n--- FRAME BREAK ---\n\n');
     navigator.clipboard.writeText(text);
     toast('Active layer copied to clipboard!', 'success');
   };
 
   const downloadTxt = () => {
-    if (!activeLayer || activeLayer.frames.length === 0) return;
-    const text = activeLayer.frames.join('\n\n--- FRAME BREAK ---\n\n');
+    if (!activeLayer || (activeLayer.frames?.length || 0) === 0) return;
+    const text = (activeLayer.frames || []).join('\n\n--- FRAME BREAK ---\n\n');
     const blob = new Blob([text], { type: 'text/plain' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `ascii-${activeLayer.name}-${Date.now()}.txt`; a.click();
+    a.href = url;
+    a.download = `ascii-${activeLayer?.name || 'export'}-${Date.now()}.txt`;
+    a.click();
     URL.revokeObjectURL(url);
   };
 
@@ -483,13 +493,15 @@ function PlaygroundContent() {
     const content = `<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>body{background:${bgTheme.bg};color:${color};font-family:monospace;line-height:${fontSize}px;font-size:${fontSize}px;white-space:pre;}#art{display:inline-block;}</style>
-</head><body><div id="art">${activeLayer.frames[0]}</div>
-<script>const frames=${JSON.stringify(activeLayer.frames)};let f=0;const art=document.getElementById('art');if(frames.length>1){setInterval(()=>{f=(f+1)%frames.length;art.textContent=frames[f];},${1000 / (activeLayer.fps || 12)});}</script>
+</head><body><div id="art">${activeLayer?.frames[0] || ''}</div>
+<script>const frames=${JSON.stringify(activeLayer?.frames || [])};let f=0;const art=document.getElementById('art');if(frames.length>1){setInterval(()=>{f=(f+1)%frames.length;art.textContent=frames[f];},${1000 / (activeLayer?.fps || 12)});}</script>
 </body></html>`;
     const blob = new Blob([content], { type: 'text/html' });
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
-    a.href = url; a.download = `ascii-${activeLayer.name}-${Date.now()}.html`; a.click();
+    a.href = url;
+    a.download = `ascii-${activeLayer?.name || 'export'}-${Date.now()}.html`;
+    a.click();
     URL.revokeObjectURL(url);
   };
 
@@ -520,7 +532,7 @@ function PlaygroundContent() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           name,
-          frames: activeLayer.frames,
+          frames: activeLayer?.frames || [],
           fps: isVideo ? videoFps : 1,
         })
       });
@@ -564,8 +576,8 @@ function PlaygroundContent() {
     if (!activeLayer || !activeLayer.frames[0]) return;
 
     // Calculate ASCII dimensions accurately
-    const lines = activeLayer.frames[0].split('\n');
-    const textHeight = lines.length * activeLayer.options.fontSize;
+    const lines = (activeLayer?.frames[0] || '').split('\n');
+    const textHeight = lines.length * (activeLayer?.options.fontSize || 8);
 
     // Measure width using a temporary canvas for accuracy instead of estimating
     const canvas = document.createElement('canvas');
@@ -574,7 +586,7 @@ function PlaygroundContent() {
 
     // Match Tailwind 'font-mono' stack as closely as possible to ensure accurate measurement
     // Default Tailwind mono stack: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace
-    ctx.font = `${activeLayer.options.fontSize}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace`;
+    ctx.font = `${activeLayer?.options.fontSize || 8}px ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace`;
 
     // Find longest line to measure
     let maxLineWidth = 0;
@@ -623,11 +635,16 @@ function PlaygroundContent() {
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [generate]);
 
-  if (!activeLayer) {
-    return (
-      <div className="min-h-screen bg-black text-white pt-24 text-center">Loading layers...</div>
-    );
-  }
+  // Fallback if activeLayer is missing but layers exist
+  useEffect(() => {
+    if (layers.length > 0 && !activeLayerId) {
+      setActiveLayerId(layers[0].id);
+    }
+  }, [layers, activeLayerId, setActiveLayerId]);
+
+  // If no layers at all, render the shell but with an "Add Layer" prompt or empty state
+  // For now, we'll keep the main layout but handle the activeLayer checks inside.
+
 
   return (
     <div className="min-h-screen bg-background text-text-primary">
@@ -651,10 +668,10 @@ function PlaygroundContent() {
 
             {/* TOP ACTIONS */}
             <motion.div variants={item} className="space-y-3 pb-2">
-              <Button onClick={generate} disabled={!activeLayer.file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)]" isLoading={loading} variant="primary">
+              <Button onClick={generate} disabled={!activeLayer?.file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)]" isLoading={loading} variant="primary">
                 {loading ? 'PROCESSING...' : 'GENERATE ASCII'}
               </Button>
-              {loading && (
+              {loading ? (
                 <div className="space-y-1 px-1">
                   <div className="h-1 bg-surface-active rounded-full overflow-hidden">
                     <div className="h-full bg-accent-success transition-all duration-300 rounded-full" style={{ width: `${progress}%` }} />
@@ -664,7 +681,7 @@ function PlaygroundContent() {
                     <span>{Math.round(progress)}%</span>
                   </div>
                 </div>
-              )}
+              ) : null}
             </motion.div>
 
             <motion.div variants={container} className="flex-1 overflow-y-auto pr-2 space-y-4 custom-scrollbar">
@@ -695,7 +712,7 @@ function PlaygroundContent() {
                 <Card className="space-y-4 card-hover-animation">
                   <div className="flex items-center justify-between">
                     <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Source</h3>
-                    <span className="text-[9px] text-text-secondary">{activeLayer.name}</span>
+                    <span className="text-[9px] text-text-secondary">{activeLayer?.name || 'No Layer'}</span>
                   </div>
 
                   <div
@@ -705,6 +722,7 @@ function PlaygroundContent() {
                     onDrop={handleDrop}
                   >
                     <input type="file" accept="image/*,video/*" onChange={handleFileChange}
+                      disabled={!activeLayer}
                       className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
                     <div className={clsx(
                       "border border-dashed rounded-lg p-5 text-center transition-all",
@@ -712,7 +730,9 @@ function PlaygroundContent() {
                         ? 'border-accent-success bg-accent-success/5 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
                         : 'border-border group-hover:border-border-hover'
                     )}>
-                      {activeLayer.file ? (
+                      {!activeLayer ? (
+                        <div className="text-xs text-text-muted italic">Click "＋ Add Layer" above to start</div>
+                      ) : activeLayer.file ? (
                         <div className="text-text-primary text-xs font-mono truncate">
                           {activeLayer.file.name}
                           <span className="block text-[10px] text-text-muted mt-1">{(activeLayer.file.size / 1024).toFixed(1)} KB</span>
@@ -725,9 +745,9 @@ function PlaygroundContent() {
                     </div>
                   </div>
 
-                  {activeLayer.previewUrl && activeLayer.file && (
+                  {activeLayer?.previewUrl && activeLayer?.file && (
                     <div className="mt-3 rounded-lg overflow-hidden border border-border bg-black">
-                      {activeLayer.type === 'video' ? (
+                      {activeLayer?.type === 'video' ? (
                         <video src={activeLayer.previewUrl} className="w-full max-h-48 object-contain" autoPlay loop muted playsInline />
                       ) : (
                         <img src={activeLayer.previewUrl} alt="Source preview" className="w-full max-h-48 object-contain" />
@@ -771,7 +791,7 @@ function PlaygroundContent() {
 
                   <div className="space-y-4 pt-2 border-t border-border">
                     <Slider label="Output Width" value={width || 100} min={20} max={240} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} ch`} />
-                    {(activeLayer.file?.type.startsWith('video/') || activeLayer.file?.name.toLowerCase().endsWith('.gif')) && (
+                    {(activeLayer?.file?.type.startsWith('video/') || activeLayer?.file?.name.toLowerCase().endsWith('.gif')) && (
                       <Slider label="Motion FPS" value={videoFps || 12} min={1} max={30} onChange={(v) => setOptions(p => ({ ...p, videoFps: v }))} valueDisplay={`${videoFps} FPS`} />
                     )}
                   </div>
@@ -805,8 +825,8 @@ function PlaygroundContent() {
                             <input
                               type="color"
                               value={options.color || '#ffffff'}
-                              onChange={(e) => replaceLayerOptions(activeLayer.id, { color: e.target.value, customColor: e.target.value, palette: undefined })}
-                              onBlur={(e) => updateLayerOptions(activeLayer.id, { color: e.target.value })}
+                              onChange={(e) => activeLayer && replaceLayerOptions(activeLayer.id, { color: e.target.value, customColor: e.target.value, palette: undefined })}
+                              onBlur={(e) => activeLayer && updateLayerOptions(activeLayer.id, { color: e.target.value })}
                               className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
                             />
                             <div className="w-full h-full rounded border border-border group-hover:border-border-hover flex items-center justify-center transition-colors"
@@ -842,27 +862,27 @@ function PlaygroundContent() {
                 <Card className="space-y-4 card-hover-animation">
                   <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Transform</h3>
                   <div className="grid grid-cols-2 gap-4">
-                    <Slider label="Position X" value={activeLayer.transform.x} min={-400} max={400} step={1}
-                      onChange={(v) => updateLayerTransform(activeLayer.id, { x: v })}
-                      valueDisplay={`${activeLayer.transform.x}px`}
+                    <Slider label="Position X" value={activeLayer?.transform.x || 0} min={-400} max={400} step={1}
+                      onChange={(v) => activeLayer && updateLayerTransform(activeLayer.id, { x: v })}
+                      valueDisplay={`${activeLayer?.transform.x || 0}px`}
                     />
-                    <Slider label="Position Y" value={activeLayer.transform.y} min={-300} max={300} step={1}
-                      onChange={(v) => updateLayerTransform(activeLayer.id, { y: v })}
-                      valueDisplay={`${activeLayer.transform.y}px`}
+                    <Slider label="Position Y" value={activeLayer?.transform.y || 0} min={-300} max={300} step={1}
+                      onChange={(v) => activeLayer && updateLayerTransform(activeLayer.id, { y: v })}
+                      valueDisplay={`${activeLayer?.transform.y || 0}px`}
                     />
                     <div className="col-span-2 flex justify-end">
-                      <button onClick={() => updateLayerTransform(activeLayer.id, { x: 0, y: 0 })} className="text-[9px] text-text-muted hover:text-text-primary uppercase tracking-wider">Reset Position</button>
+                      <button onClick={() => activeLayer && updateLayerTransform(activeLayer.id, { x: 0, y: 0 })} className="text-[9px] text-text-muted hover:text-text-primary uppercase tracking-wider">Reset Position</button>
                     </div>
 
-                    <Slider label="Opacity" value={activeLayer.transform.opacity} min={0} max={1} step={0.01}
-                      onChange={(v) => updateLayerTransform(activeLayer.id, { opacity: v })}
-                      valueDisplay={`${Math.round(activeLayer.transform.opacity * 100)}%`}
+                    <Slider label="Opacity" value={activeLayer?.transform.opacity || 1} min={0} max={1} step={0.01}
+                      onChange={(v) => activeLayer && updateLayerTransform(activeLayer.id, { opacity: v })}
+                      valueDisplay={`${Math.round((activeLayer?.transform.opacity || 0) * 100)}%`}
                     />
                     <div className="flex items-end gap-2">
                       <div className="flex-1">
-                        <Slider label="Scale" value={activeLayer.transform.scale} min={0.1} max={3} step={0.1}
-                          onChange={(v) => updateLayerTransform(activeLayer.id, { scale: v })}
-                          valueDisplay={`${activeLayer.transform.scale.toFixed(1)}x`}
+                        <Slider label="Scale" value={activeLayer?.transform.scale || 1} min={0.1} max={3} step={0.1}
+                          onChange={(v) => activeLayer && updateLayerTransform(activeLayer.id, { scale: v })}
+                          valueDisplay={`${(activeLayer?.transform.scale || 1).toFixed(1)}x`}
                         />
                       </div>
                       <div className="flex gap-1 mb-1">
@@ -870,15 +890,15 @@ function PlaygroundContent() {
                         <button onClick={() => handleFitToCanvas(true)} title="Cover Canvas" className="px-2 py-1 bg-surface border border-border rounded text-[9px] uppercase hover:bg-surface-hover text-text-muted hover:text-text-primary">Cover</button>
                       </div>
                     </div>
-                    <Slider label="Rotation" value={activeLayer.transform.rotation} min={0} max={360} step={1}
-                      onChange={(v) => updateLayerTransform(activeLayer.id, { rotation: v })}
-                      valueDisplay={`${activeLayer.transform.rotation}°`}
+                    <Slider label="Rotation" value={activeLayer?.transform.rotation || 0} min={0} max={360} step={1}
+                      onChange={(v) => activeLayer && updateLayerTransform(activeLayer.id, { rotation: v })}
+                      valueDisplay={`${activeLayer?.transform.rotation || 0}°`}
                     />
                     <div>
                       <label className="block text-[10px] text-text-muted mb-2 uppercase tracking-wider font-bold">Blend Mode</label>
                       <select
-                        value={activeLayer.transform.blendMode}
-                        onChange={(e) => updateLayerTransform(activeLayer.id, { blendMode: e.target.value as any })}
+                        value={activeLayer?.transform.blendMode || 'normal'}
+                        onChange={(e) => activeLayer && updateLayerTransform(activeLayer.id, { blendMode: e.target.value as any })}
                         className="w-full bg-black border border-border rounded px-2 py-1 text-[10px] text-text-primary focus:outline-none focus:border-border-hover"
                       >
                         <option value="normal">Normal</option>
@@ -894,8 +914,8 @@ function PlaygroundContent() {
                       <div className="mt-2">
                         <label className="block text-[10px] text-text-muted mb-2 uppercase tracking-wider font-bold">Animation LUT</label>
                         <select
-                          value={activeLayer.transform.lut || 'none'}
-                          onChange={(e) => updateLayerTransform(activeLayer.id, { lut: e.target.value as any })}
+                          value={activeLayer?.transform.lut || 'none'}
+                          onChange={(e) => activeLayer && updateLayerTransform(activeLayer.id, { lut: e.target.value as any })}
                           className="w-full bg-black border border-border rounded px-2 py-1 text-[10px] text-text-primary focus:outline-none focus:border-border-hover"
                         >
                           <option value="none">None</option>
@@ -911,10 +931,10 @@ function PlaygroundContent() {
 
                       <div className="flex gap-2 mt-2">
                         <button
-                          onClick={() => updateLayerTransform(activeLayer.id, { flipX: !activeLayer.transform.flipX })}
+                          onClick={() => activeLayer && updateLayerTransform(activeLayer.id, { flipX: !activeLayer.transform.flipX })}
                           className={clsx(
                             "flex-1 py-1.5 text-[9px] uppercase font-bold rounded border transition-colors",
-                            activeLayer.transform.flipX
+                            activeLayer?.transform.flipX
                               ? 'bg-surface-active border-text-secondary text-text-primary'
                               : 'border-border text-text-muted hover:text-text-primary'
                           )}
@@ -922,10 +942,10 @@ function PlaygroundContent() {
                           Flip H
                         </button>
                         <button
-                          onClick={() => updateLayerTransform(activeLayer.id, { flipY: !activeLayer.transform.flipY })}
+                          onClick={() => activeLayer && updateLayerTransform(activeLayer.id, { flipY: !activeLayer.transform.flipY })}
                           className={clsx(
                             "flex-1 py-1.5 text-[9px] uppercase font-bold rounded border transition-colors",
-                            activeLayer.transform.flipY
+                            activeLayer?.transform.flipY
                               ? 'bg-surface-active border-text-secondary text-text-primary'
                               : 'border-border text-text-muted hover:text-text-primary'
                           )}
@@ -964,22 +984,22 @@ function PlaygroundContent() {
                       <label className="text-[10px] text-zinc-500 uppercase tracking-widest font-bold">Audio Reactivity</label>
                       <input
                         type="checkbox"
-                        checked={activeLayer.transform.audioReact?.enabled ?? false}
-                        onChange={(e) => updateLayerTransform(activeLayer.id, {
+                        checked={activeLayer?.transform.audioReact?.enabled ?? false}
+                        onChange={(e) => activeLayer && updateLayerTransform(activeLayer.id, {
                           audioReact: { ...activeLayer.transform.audioReact!, enabled: e.target.checked }
                         } as any)}
                         className="w-3 h-3 accent-green-500 cursor-pointer"
                       />
                     </div>
 
-                    {activeLayer.transform.audioReact?.enabled && (
+                    {activeLayer?.transform.audioReact?.enabled && (
                       <div className="space-y-3 animate-in fade-in slide-in-from-top-1 duration-200">
                         <div className="grid grid-cols-2 gap-2">
                           <div>
                             <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Source</label>
                             <select
-                              value={activeLayer.transform.audioReact.source}
-                              onChange={(e) => updateLayerTransform(activeLayer.id, {
+                              value={activeLayer?.transform.audioReact?.source || 'bass'}
+                              onChange={(e) => activeLayer && updateLayerTransform(activeLayer.id, {
                                 audioReact: { ...activeLayer.transform.audioReact!, source: e.target.value as any }
                               } as any)}
                               className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
@@ -993,9 +1013,9 @@ function PlaygroundContent() {
                           <div>
                             <label className="block text-[9px] text-zinc-600 mb-1 uppercase">Target</label>
                             <select
-                              value={activeLayer.transform.audioReact.target}
-                              onChange={(e) => updateLayerTransform(activeLayer.id, {
-                                audioReact: { ...activeLayer.transform.audioReact!, target: e.target.value as any }
+                              value={activeLayer?.transform?.audioReact?.target || 'scale'}
+                              onChange={(e) => activeLayer && updateLayerTransform(activeLayer.id, {
+                                audioReact: { ...activeLayer.transform?.audioReact!, target: e.target.value as any }
                               } as any)}
                               className="w-full bg-black border border-zinc-800 rounded px-1.5 py-1 text-[9px] text-white"
                             >
@@ -1012,15 +1032,15 @@ function PlaygroundContent() {
                         <div className="space-y-1">
                           <div className="flex justify-between text-[9px]">
                             <span className="text-zinc-600 uppercase">Strength</span>
-                            <span className="text-zinc-400">{(activeLayer.transform.audioReact.strength * 100).toFixed(0)}%</span>
+                            <span className="text-zinc-400">{(activeLayer?.transform.audioReact?.strength || 0 * 100).toFixed(0)}%</span>
                           </div>
                           <input
                             type="range"
                             min="0"
                             max="2"
                             step="0.05"
-                            value={activeLayer.transform.audioReact.strength}
-                            onChange={(e) => updateLayerTransform(activeLayer.id, {
+                            value={activeLayer?.transform.audioReact?.strength || 0.5}
+                            onChange={(e) => activeLayer && updateLayerTransform(activeLayer.id, {
                               audioReact: { ...activeLayer.transform.audioReact!, strength: parseFloat(e.target.value) }
                             } as any)}
                             className="w-full h-1 bg-zinc-900 rounded-lg appearance-none cursor-pointer accent-green-500"
@@ -1028,10 +1048,10 @@ function PlaygroundContent() {
                         </div>
 
                         <button
-                          onClick={() => updateLayerTransform(activeLayer.id, {
+                          onClick={() => activeLayer && activeLayer.transform.audioReact && updateLayerTransform(activeLayer.id, {
                             audioReact: { ...activeLayer.transform.audioReact!, invert: !activeLayer.transform.audioReact?.invert }
                           } as any)}
-                          className={`w-full py-1 text-[8px] uppercase font-bold rounded border ${activeLayer.transform.audioReact.invert ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-600'}`}
+                          className={`w-full py-1 text-[8px] uppercase font-bold rounded border ${activeLayer?.transform.audioReact?.invert ? 'bg-zinc-800 border-zinc-600 text-white' : 'border-zinc-800 text-zinc-600'}`}
                         >
                           Invert Signal
                         </button>
@@ -1072,7 +1092,7 @@ function PlaygroundContent() {
                           { label: 'Sharpen Detail', value: sharpen, key: 'sharpen' as const },
                           { label: 'Adaptive Contrast', value: clahe, key: 'clahe' as const },
                           { label: 'Luminance Dither', value: dither, key: 'dither' as const },
-                          { label: 'Isolate Motion', value: frameDiff, key: 'frameDiff' as const, hidden: !((activeLayer.file?.type.startsWith('video/') || activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif'))) },
+                          { label: 'Isolate Motion', value: frameDiff, key: 'frameDiff' as const, hidden: !((activeLayer?.file?.type.startsWith('video/') || activeLayer?.file?.type === 'image/gif' || activeLayer?.file?.name.toLowerCase().endsWith('.gif'))) },
                           { label: 'Remove BG', value: removeBackground, key: 'removeBackground' as const },
                         ].map(f => !f.hidden && (
                           <div key={f.label} className="flex items-center justify-between">
@@ -1111,20 +1131,21 @@ function PlaygroundContent() {
 
           {/* ─── Preview Panel ─── */}
           <motion.div variants={item} initial={{ opacity: 0, x: 20 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: 0.2 }} className="lg:col-span-8 flex flex-col gap-4">
-            <Card className="relative flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[500px] card-hover-animation">
-              <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-start pointer-events-none">
-                <div className="flex gap-2 pointer-events-auto">
-                  <div className="flex gap-1.5 bg-black/50 backdrop-blur-md p-1.5 rounded-lg border border-white/10">
+            <Card className="relative flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[700px] card-hover-animation">
+              {/* Controls Header (Static Toolbar) */}
+              <div className="relative z-10 flex justify-between items-center p-4 border-b border-white/5 bg-black/20 backdrop-blur-sm">
+                <div className="flex gap-2">
+                  <div className="flex gap-1.5 bg-black/50 p-1.5 rounded-lg border border-white/10">
                     <div className="w-3 h-3 rounded-full bg-red-500/80" />
                     <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
                     <div className="w-3 h-3 rounded-full bg-green-500/80" />
                   </div>
                 </div>
 
-                <div className="flex gap-3 pointer-events-auto">
+                <div className="flex gap-3">
                   {/* Recording Indicator */}
                   {isRecording && (
-                    <div className="flex items-center gap-2 text-accent-danger animate-pulse bg-black/50 backdrop-blur-md px-3 py-1 rounded border border-accent-danger/30">
+                    <div className="flex items-center gap-2 text-accent-danger animate-pulse bg-black/50 px-3 py-1 rounded border border-accent-danger/30">
                       <div className="w-2 h-2 rounded-full bg-accent-danger" />
                       <span className="text-[10px] uppercase font-bold tracking-widest">
                         REC {Math.floor(recordingTime / 60)}:{String(recordingTime % 60).padStart(2, '0')}
@@ -1132,24 +1153,12 @@ function PlaygroundContent() {
                     </div>
                   )}
 
-                  <div className="text-[10px] font-mono text-zinc-500 bg-black/50 backdrop-blur-md px-2 py-1 rounded border border-white/10">
+                  <div className="text-[10px] font-mono text-zinc-500 bg-black/50 px-2 py-1 rounded border border-white/10">
                     COMPOSITION PREVIEW
                   </div>
                 </div>
 
-                <div className="flex gap-2 pointer-events-auto">
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className={clsx(
-                      "h-6 w-6 p-0 hover:bg-surface-active",
-                      isRecording ? 'text-accent-danger bg-accent-danger/10 hover:bg-accent-danger/20' : 'text-text-muted'
-                    )}
-                    onClick={isRecording ? stopRecording : startRecording}
-                    title={isRecording ? "Stop Recording" : "Record Screen (Video)"}
-                  >
-                    <div className={clsx("w-2.5 h-2.5 rounded-full", isRecording ? 'bg-current' : 'border-2 border-current')} />
-                  </Button>
+                <div className="flex gap-2 items-center">
                   <div className="flex items-center gap-1 border-r border-border pr-2 mr-2">
                     <Button variant="ghost" size="sm" onClick={undo} disabled={!canUndo} className="h-6 w-6 p-0 text-text-muted hover:text-text-primary" title="Undo (Ctrl+Z)">
                       <svg xmlns="http://www.w3.org/2000/svg" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 7v6h6" /><path d="M21 17a9 9 0 0 0-9-9 9 9 0 0 0-6 2.3L3 13" /></svg>
@@ -1175,6 +1184,14 @@ function PlaygroundContent() {
                     <button onClick={() => downloadMp4(false)} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as MP4">MP4</button>
                     <div className="w-[1px] bg-border/50 my-0.5" />
                     <button onClick={downloadHtml} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Active Layer as HTML">HTML</button>
+                    <div className="w-[1px] bg-border/50 my-0.5" />
+                    <button
+                      onClick={isRecording ? stopRecording : startRecording}
+                      className={`px-2 py-0.5 text-[9px] rounded transition-colors ${isRecording ? 'text-accent-danger animate-pulse font-bold' : 'text-text-muted hover:text-text-primary hover:bg-surface-active'}`}
+                      title={isRecording ? "Stop Recording" : "Record Canvas (WebM)"}
+                    >
+                      {isRecording ? 'STOP' : 'REC'}
+                    </button>
                   </div>
 
                   <Button size="sm" variant="secondary" onClick={() => setShowSaveModal(true)} className="text-[9px] h-6 px-2 ml-1">
@@ -1184,7 +1201,7 @@ function PlaygroundContent() {
               </div>
 
               <div ref={compositionRef} className={clsx("relative flex-1 overflow-hidden", isRecording && "cursor-none")}
-                style={{ background: activeLayer?.options.bgTheme?.bg || '#111111' }}
+                style={{ background: activeLayer?.options?.bgTheme?.bg || '#111111' }}
               >
                 {/* Composition Canvas */}
                 <CompositionCanvas
@@ -1200,6 +1217,27 @@ function PlaygroundContent() {
                 />
               </div>
 
+            </Card>
+
+            {/* Timeline Editor (Separate Panel) */}
+            <Card className="h-48 p-0 overflow-hidden bg-black/50 border-t border-white/5 relative z-10">
+              <Timeline
+                currentFrame={globalFrameCount}
+                totalFrames={projectDuration}
+                fps={12}
+                isPlaying={isPlaying}
+                canPlay={layers.some(l => l.frames.length > 0)}
+                onTogglePlay={() => {
+                  const hasFrames = layers.some(l => l.frames.length > 0);
+                  if (hasFrames) {
+                    setIsPlaying(!isPlaying);
+                  } else {
+                    toast("Add some media and generate ASCII first!", "info");
+                  }
+                }}
+                onSeek={(frame) => setGlobalFrameCount(frame)}
+                layers={layers}
+              />
             </Card>
           </motion.div>
         </div>

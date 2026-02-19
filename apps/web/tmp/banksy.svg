@@ -1,0 +1,25 @@
+
+<svg width="400" height="500" xmlns="http://www.w3.org/2000/svg">
+  <rect width="100%" height="100%" fill="white"/>
+  
+  <!-- The Girl (Silhouette) - Scaled UP (2.2x) and Centered -->
+  <g transform="translate(0, 150) scale(1.8)">
+    <!-- Dress/Body -->
+    <path d="M60,200 L140,200 L160,100 L120,50 L80,50 L40,100 Z" fill="black"/>
+    <!-- Head -->
+    <circle cx="100" cy="40" r="35" fill="black"/>
+    <!-- Arm reaching out -->
+    <path d="M120,60 L180,30 L170,20 L130,50 Z" fill="black"/>
+    <!-- Legs -->
+    <rect x="70" y="200" width="20" height="60" fill="black"/>
+    <rect x="110" y="200" width="20" height="60" fill="black"/>
+  </g>
+
+  <!-- The Balloon (Heart) - Scaled UP -->
+  <g transform="translate(240, 40) scale(1.8) rotate(20)">
+    <path d="M10,30 A20,20,0,0,1,50,30 A20,20,0,0,1,90,30 Q90,60,50,90 Q10,60,10,30 Z" fill="black"/>
+  </g>
+  
+  <!-- The String -->
+  <line x1="280" y1="230" x2="330" y2="150" stroke="black" stroke-width="4"/>
+</svg>

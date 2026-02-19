@@ -100,6 +100,30 @@ export function useAsciiCanvasRenderer({
                 ctx.globalCompositeOperation = layer.transform.blendMode as GlobalCompositeOperation;
             }
 
+            // Background Fill (if not removed)
+            if (!layer.options.removeBackground) {
+                // We need to fill the rect behind the text.
+                // Since we are centered, we need to know the dimensions.
+                // Ideally we measure the frame dimensions.
+                const lines = frame.split('\n');
+                const lineHeight = layer.options.fontSize;
+                const totalHeight = lines.length * lineHeight;
+
+                // Measure max width
+                let maxWidth = 0;
+                lines.forEach(line => {
+                    const w = ctx.measureText(line).width; // This might be slightly off if font not set yet?
+                    // Set font first!
+                    ctx.font = `${layer.options.fontSize}px monospace`;
+                    const realW = ctx.measureText(line).width;
+                    if (realW > maxWidth) maxWidth = realW;
+                });
+
+                // Draw Rect
+                ctx.fillStyle = layer.options.bgTheme?.bg || '#000000';
+                ctx.fillRect(-maxWidth / 2, -totalHeight / 2, maxWidth, totalHeight);
+            }
+
             // Font Settings
             const fontSize = layer.options.fontSize;
             ctx.font = `${fontSize}px monospace`; // Ensure monospace font matches CSS

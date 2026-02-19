@@ -164,7 +164,8 @@ export function CompositionCanvas({
                                 style={{
                                     fontSize: `${layer.options.fontSize}px`,
                                     lineHeight: `${layer.options.fontSize}px`,
-                                    color: layer.options.colorMode ? undefined : layer.options.color
+                                    color: layer.options.colorMode ? undefined : layer.options.color,
+                                    backgroundColor: layer.options.removeBackground ? undefined : (layer.options.bgTheme?.bg || '#000000')
                                 }}
                                 dangerouslySetInnerHTML={{ __html: activeFrame }}
                             />

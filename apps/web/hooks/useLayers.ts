@@ -30,6 +30,7 @@ const DEFAULT_OPTIONS: LayerOptions = {
     noise: 0,
     overlayText: '',
     depthMode: false,
+    edgeThreshold: 30, // Default for edge detection
 };
 
 const DEFAULT_TRANSFORM: LayerTransform = {
@@ -82,18 +83,21 @@ export function useLayers() {
     const removeLayer = useCallback((id: string) => {
         setLayers(prev => {
             const newLayers = prev.filter(l => l.id !== id);
-            // If we removed the active layer, select the next one
+
+            // If we removed the active layer, select the next one in line
             if (activeLayerId === id) {
-                // Determine new active layer ID properly? 
-                // We can't set state inside setLayers callback if it depends on result.
-                // But setActiveLayerId is outside. 
-                // We'll fix active ID in effect or just check existence in Page.
-                // For now, let's just update layers.
+                if (newLayers.length > 0) {
+                    // Try to pick the one that was previously below it, or just the first one
+                    const removedIndex = prev.findIndex(l => l.id === id);
+                    const nextActiveIndex = Math.min(removedIndex, newLayers.length - 1);
+                    setActiveLayerId(newLayers[nextActiveIndex].id);
+                } else {
+                    setActiveLayerId(null);
+                }
             }
+
             return newLayers;
         });
-        // We set active ID separately if needed, but for history purposes we only track layers.
-        // If activeID becomes invalid, Page handles it.
     }, [activeLayerId, setLayers]);
 
     const updateLayer = useCallback((id: string, updates: Partial<Layer>) => {

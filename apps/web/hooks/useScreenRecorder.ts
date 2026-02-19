@@ -95,52 +95,54 @@ export function useScreenRecorder({ cropTargetRef, externalStream, audioStream }
                     }
                 }
             }
-            const track = stream.getVideoTracks()[0];
-            const settings = track.getSettings();
+            // --- REGION CAPTURE IMPLEMENTATION (Screen Share Only) ---
+            if (!externalStream) {
+                const track = stream.getVideoTracks()[0];
+                const settings = track.getSettings();
 
-            console.log("Region Capture Debug:", {
-                supported: !!(window as any).CropTarget,
-                ref: !!cropTargetRef?.current,
-                surface: settings.displaySurface
-            });
+                console.log("Region Capture Debug:", {
+                    supported: !!(window as any).CropTarget,
+                    ref: !!cropTargetRef?.current,
+                    surface: settings.displaySurface
+                });
 
-            // Check if user selected the correct surface type for Region Capture
-            if (settings.displaySurface !== 'browser') {
-                const msg = "⚠️ WRONG SELECTION: You selected '" + settings.displaySurface + "'. You MUST select 'This Tab' to record just the art.";
-                alert(msg);
-                setRecordingError(msg);
-            }
-
-            // --- REGION CAPTURE IMPLEMENTATION ---
-            if (cropTargetRef?.current && (window as any).CropTarget) {
-                try {
-                    // Only attempt crop if we think it's possible (or just try anyway)
-                    // Create a CropTarget from the DOM element
-                    // @ts-ignore
-                    const cropTarget = await CropTarget.fromElement(cropTargetRef.current);
-
-                    // Apply cropping to the video track
-                    // @ts-ignore
-                    await track.cropTo(cropTarget);
-
-                    console.log("Region Capture applied successfully.");
-                    setRecordingError(null); // Clear any previous errors if successful
-                } catch (cropError) {
-                    console.warn("Region Capture failed:", cropError);
-                    alert("Region Capture Error: " + cropError);
-                    // It's possible the user selected "This Tab" but something else went wrong.
-                    // But usually displaySurface check catches the main user error.
-                    if (settings.displaySurface === 'browser') {
-                        setRecordingError("Auto-crop failed internally: " + cropError);
-                    }
-                }
-            } else {
-                if (!(window as any).CropTarget) {
-                    const msg = "Your browser does not support Region Capture (Auto-Crop). Please use latest Chrome/Edge.";
+                // Check if user selected the correct surface type for Region Capture
+                if (settings.displaySurface !== 'browser') {
+                    const msg = "⚠️ WRONG SELECTION: You selected '" + settings.displaySurface + "'. You MUST select 'This Tab' to record just the art.";
                     alert(msg);
                     setRecordingError(msg);
-                } else if (!cropTargetRef?.current) {
-                    alert("Internal Error: Capture Target not found.");
+                }
+
+                if (cropTargetRef?.current && (window as any).CropTarget) {
+                    try {
+                        // Only attempt crop if we think it's possible (or just try anyway)
+                        // Create a CropTarget from the DOM element
+                        // @ts-ignore
+                        const cropTarget = await CropTarget.fromElement(cropTargetRef.current);
+
+                        // Apply cropping to the video track
+                        // @ts-ignore
+                        await track.cropTo(cropTarget);
+
+                        console.log("Region Capture applied successfully.");
+                        setRecordingError(null); // Clear any previous errors if successful
+                    } catch (cropError) {
+                        console.warn("Region Capture failed:", cropError);
+                        alert("Region Capture Error: " + cropError);
+                        // It's possible the user selected "This Tab" but something else went wrong.
+                        // But usually displaySurface check catches the main user error.
+                        if (settings.displaySurface === 'browser') {
+                            setRecordingError("Auto-crop failed internally: " + cropError);
+                        }
+                    }
+                } else {
+                    if (!(window as any).CropTarget) {
+                        const msg = "Your browser does not support Region Capture (Auto-Crop). Please use latest Chrome/Edge.";
+                        alert(msg);
+                        setRecordingError(msg);
+                    } else if (!cropTargetRef?.current) {
+                        alert("Internal Error: Capture Target not found.");
+                    }
                 }
             }
             // -------------------------------------

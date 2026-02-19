@@ -23,6 +23,7 @@ export interface LayerOptions {
     noise: number;
     overlayText: string;
     depthMode: boolean;
+    edgeThreshold?: number;
 }
 
 export interface LayerTransform {
