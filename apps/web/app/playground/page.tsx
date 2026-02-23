@@ -12,6 +12,7 @@ import { ToastProvider, useToast } from '../../components/ui/ToastContext';
 import { useLayers } from '../../hooks/useLayers';
 import { LayerManager } from '../../components/playground/LayerManager';
 import { PresetLibrary } from '../../components/playground/PresetLibrary';
+import { GistManager } from '../../components/playground/GistManager';
 import { PRESETS, Preset } from '../../config/presets';
 
 import { Layer, LayerOptions } from '../../types/layer';
@@ -788,8 +789,29 @@ function PlaygroundContent() {
                     </Button>
                   </div>
 
+                  {/* Background Theme */}
+                  <div className="space-y-2">
+                    <label className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Canvas Background</label>
+                    <div className="grid grid-cols-2 gap-2">
+                      {BG_THEMES.map(theme => (
+                        <button
+                          key={theme.label}
+                          onClick={() => setOptions(p => ({ ...p, bgTheme: theme }))}
+                          className={clsx(
+                            "py-1.5 rounded border text-[9px] truncate transition-colors",
+                            options.bgTheme?.label === theme.label
+                              ? "border-accent-success text-text-primary bg-surface-active"
+                              : "border-border text-text-muted hover:border-border-hover hover:text-text-primary"
+                          )}
+                        >
+                          {theme.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+
                   {/* Palette & Color Group */}
-                  <div className="space-y-4">
+                  <div className="space-y-4 border-t border-border pt-4">
                     {/* Real-time Color Control */}
                     <div className="space-y-3">
                       <div className="flex justify-between items-center">
@@ -1174,8 +1196,26 @@ function PlaygroundContent() {
                     <div className="w-[1px] bg-border/50 my-0.5" />
                     <button onClick={() => downloadMp4(false)} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as MP4">MP4</button>
                     <div className="w-[1px] bg-border/50 my-0.5" />
+                    <button onClick={() => exportGif()} disabled={isGifExporting} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors flex items-center gap-1" title="Export Composite as GIF">
+                      GIF {isGifExporting && <span className="text-accent-success animate-pulse">{Math.round(gifProgress)}%</span>}
+                    </button>
+                    <div className="w-[1px] bg-border/50 my-0.5" />
+                    <button onClick={downloadTxt} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Active Layer as TXT">TXT</button>
+                    <div className="w-[1px] bg-border/50 my-0.5" />
                     <button onClick={downloadHtml} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Active Layer as HTML">HTML</button>
                   </div>
+
+                  {activeLayer && activeLayer.frames.length > 0 && (
+                    <div className="flex items-center ml-1">
+                      <GistManager
+                        content={activeLayer.frames.join('\n\n--- FRAME BREAK ---\n\n')}
+                        filename={`art-${Date.now()}.txt`}
+                        className="px-2 py-0.5 text-[9px] bg-surface-active border border-border text-text-muted hover:text-text-primary hover:border-border-hover rounded transition-colors flex items-center h-6 font-mono"
+                        variant="ghost"
+                        size="sm"
+                      />
+                    </div>
+                  )}
 
                   <Button size="sm" variant="secondary" onClick={() => setShowSaveModal(true)} className="text-[9px] h-6 px-2 ml-1">
                     Save

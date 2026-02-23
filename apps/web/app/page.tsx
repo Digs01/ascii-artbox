@@ -2,100 +2,102 @@
 
 import Link from 'next/link';
 import { useEffect, useRef, useState } from 'react';
-import { MONA_LISA_ASCII, SCREAM_ASCII } from './ascii-art';
+import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
 
-// ─── Morphing Animation Hook ──────────────────────────────────────────────────
-function useMorphAscii(frames: string[], {
-    morphDuration = 1500,
-    scrambleDuration = 400,
-    pauseDuration = 3000,
-} = {}) {
-    const [text, setText] = useState(frames[0]);
-    const state = useRef({
-        frameIndex: 0,
-        morphStartTime: 0,
-        isMorphing: false,
-        charData: [] as {
-            char: string;
-            target: string;
-            startDelay: number;
-            scrambleEnd: number;
-        }[],
-    });
-
-    const CHARSET = ' .\'`^",:;Il!i><~+_-?][}{1)(|\\/tfjrxnuvczXYUJCLQ0OZmwqpdbkhao*#MW&8%B@$';
+// ─── Playback Animation Hook ──────────────────────────────────────────────────
+function usePlayAscii(frames: string[], { fps = 12 } = {}) {
+    const [text, setText] = useState(frames[0] || '');
+    const frameIndex = useRef(0);
 
     useEffect(() => {
-        let raf: number;
-        let timeout: NodeJS.Timeout;
+        if (!frames || frames.length === 0) return;
 
-        const nextPhase = () => {
-            const s = state.current;
-            const nextFrameIdx = (s.frameIndex + 1) % frames.length;
-            const nextFrame = frames[nextFrameIdx];
-            const currentFrame = frames[s.frameIndex];
-            const len = Math.max(currentFrame.length, nextFrame.length);
+        // Loop through frames
+        const interval = setInterval(() => {
+            frameIndex.current = (frameIndex.current + 1) % frames.length;
+            setText(frames[frameIndex.current]);
+        }, 1000 / fps);
 
-            s.charData = new Array(len).fill(0).map((_, i) => {
-                const maxDelay = Math.max(0, morphDuration - scrambleDuration);
-                const startDelay = Math.random() * maxDelay;
-                return {
-                    char: currentFrame[i] || ' ',
-                    target: nextFrame[i] || ' ',
-                    startDelay,
-                    scrambleEnd: startDelay + scrambleDuration,
-                };
-            });
+        return () => clearInterval(interval);
+    }, [frames, fps]);
 
-            s.isMorphing = true;
-            s.morphStartTime = performance.now();
-            s.frameIndex = nextFrameIdx;
-            console.log('Morph starting -> Frame', nextFrameIdx);
-            loop();
-        };
+    return { text, isMorphing: false };
+}
 
-        const loop = () => {
-            const now = performance.now();
-            const s = state.current;
-            const elapsed = now - s.morphStartTime;
+// ─── 3D Parallax Glitch Hero Component ─────────────────────────────────────────
+function HeroAscii({ frames }: { frames: string[] }) {
+    const { text, isMorphing } = usePlayAscii(frames, {
+        fps: 12
+    });
 
-            if (!s.isMorphing) return;
+    // Parallax logic
+    const mouseX = useMotionValue(0);
+    const mouseY = useMotionValue(0);
+    const springConfig = { damping: 25, stiffness: 120, mass: 0.5 };
+    const x = useSpring(mouseX, springConfig);
+    const y = useSpring(mouseY, springConfig);
 
-            let completedChars = 0;
-            let output = '';
+    const rotateX = useTransform(y, [-400, 400], [12, -12]);
+    const rotateY = useTransform(x, [-400, 400], [-12, 12]);
 
-            for (let i = 0; i < s.charData.length; i++) {
-                const param = s.charData[i];
-                if (param.char === '\n' || param.target === '\n') {
-                    output += '\n';
-                } else if (elapsed < param.startDelay) {
-                    output += param.char;
-                } else if (elapsed < param.scrambleEnd) {
-                    output += CHARSET[Math.floor(Math.random() * CHARSET.length)];
-                } else {
-                    output += param.target;
-                    completedChars++;
-                }
-            }
+    const handleMouseMove = (e: React.MouseEvent) => {
+        const rect = e.currentTarget.getBoundingClientRect();
+        const centerX = rect.left + rect.width / 2;
+        const centerY = rect.top + rect.height / 2;
+        mouseX.set(e.clientX - centerX);
+        mouseY.set(e.clientY - centerY);
+    };
 
-            setText(output);
+    const handleMouseLeave = () => {
+        mouseX.set(0);
+        mouseY.set(0);
+    };
 
-            if (completedChars === s.charData.length) {
-                s.isMorphing = false;
-                timeout = setTimeout(nextPhase, pauseDuration);
-            } else {
-                raf = requestAnimationFrame(loop);
-            }
-        };
+    return (
+        <motion.div
+            className="relative z-10 select-none my-4 flex justify-center items-center w-full max-w-7xl h-[500px] md:h-[650px]"
+            style={{ perspective: 1200 }}
+            onMouseMove={handleMouseMove}
+            onMouseLeave={handleMouseLeave}
+        >
+            <motion.div
+                style={{ rotateX, rotateY, transformStyle: "preserve-3d" }}
+                className="relative flex justify-center w-full cursor-crosshair scale-75 md:scale-90"
+            >
+                {/* Main Text */}
+                <pre className={`font-mono text-[4px] md:text-[5px] leading-[5px] md:leading-[6px] whitespace-pre transition-colors duration-500 ${isMorphing ? 'text-amber-400/90' : 'text-amber-500/60'}`}
+                    style={{ transform: 'translateZ(0)' }}>
+                    {text}
+                </pre>
 
-        timeout = setTimeout(nextPhase, pauseDuration);
-        return () => {
-            clearTimeout(timeout);
-            cancelAnimationFrame(raf);
-        };
-    }, [frames, morphDuration, scrambleDuration, pauseDuration]);
+                {/* Red Channel (Chromatic Aberration) */}
+                <pre aria-hidden="true"
+                    className="absolute top-0 font-mono text-[4px] md:text-[5px] leading-[5px] md:leading-[6px] text-red-500/60 whitespace-pre mix-blend-screen transition-all duration-150"
+                    style={{
+                        transform: `translateZ(-20px) translateX(${isMorphing ? '-6px' : '-1px'})`,
+                        opacity: isMorphing ? 0.9 : 0.4
+                    }}
+                >
+                    {text}
+                </pre>
 
-    return text;
+                {/* Cyan Channel (Chromatic Aberration) */}
+                <pre aria-hidden="true"
+                    className="absolute top-0 font-mono text-[4px] md:text-[5px] leading-[5px] md:leading-[6px] text-cyan-500/60 whitespace-pre mix-blend-screen transition-all duration-150"
+                    style={{
+                        transform: `translateZ(20px) translateX(${isMorphing ? '6px' : '1px'})`,
+                        opacity: isMorphing ? 0.9 : 0.4
+                    }}
+                >
+                    {text}
+                </pre>
+
+                {/* Fade Out Edges (Foreground Element) */}
+                <div className="absolute inset-x-0 top-0 h-24 bg-gradient-to-b from-black via-black/80 to-transparent pointer-events-none" style={{ transform: 'translateZ(30px)' }} />
+                <div className="absolute inset-x-0 bottom-0 h-24 bg-gradient-to-t from-black via-black/80 to-transparent pointer-events-none" style={{ transform: 'translateZ(30px)' }} />
+            </motion.div>
+        </motion.div>
+    );
 }
 
 // ─── Feature Card ─────────────────────────────────────────────────────────────
@@ -186,22 +188,26 @@ console.log(ascii);`;
 
 // ─── Header Animation ─────────────────────────────────────────────────────────
 
-// Normalize frames to ensure consistent width (120 chars) for smooth morphing
-const FRAME_WIDTH = 120;
+// Normalize frames to ensure consistent width for smooth playback
+const FRAME_WIDTH = 190; // MONKEY WIDTH
 const normalizeFrame = (frame: string) =>
     frame.split('\n')
         .map(line => line.padEnd(FRAME_WIDTH, ' ').slice(0, FRAME_WIDTH))
         .join('\n');
 
-const FRAMES = [MONA_LISA_ASCII, SCREAM_ASCII].map(normalizeFrame);
-
 export default function Home() {
-    // Morph between Mona Lisa (Frame A) and The Scream (Frame B)
-    const asciiArt = useMorphAscii(FRAMES, {
-        pauseDuration: 1000,
-        morphDuration: 1500, // Reduced slightly for faster transition
-    });
     const [copied, setCopied] = useState(false);
+    const [asciiFrames, setAsciiFrames] = useState<string[]>(['...']);
+
+    useEffect(() => {
+        // Fetch raw monkey animation bundle from public directory
+        fetch('/monkey.json')
+            .then(res => res.json())
+            .then(frames => {
+                setAsciiFrames(frames.map(normalizeFrame));
+            })
+            .catch(console.error);
+    }, []);
 
     const copySnippet = () => {
         navigator.clipboard.writeText(CODE_SNIPPET);
@@ -223,14 +229,8 @@ export default function Home() {
                     </span>
                 </div>
 
-                {/* Mona Lisa — Leonardo da Vinci ASCII recreation */}
-                <div className="relative z-10 select-none my-2">
-                    <pre className="font-mono text-[6px] leading-[7px] text-amber-500/60 whitespace-pre">
-                        {asciiArt}
-                    </pre>
-                    <div className="absolute inset-x-0 top-0 h-8 bg-gradient-to-b from-black to-transparent pointer-events-none" />
-                    <div className="absolute inset-x-0 bottom-0 h-8 bg-gradient-to-t from-black to-transparent pointer-events-none" />
-                </div>
+                {/* 3D Hero Ascii Element */}
+                <HeroAscii frames={asciiFrames} />
 
                 {/* "Reimagined." — below the animation */}
                 <div className="relative z-10 text-center mb-6">
