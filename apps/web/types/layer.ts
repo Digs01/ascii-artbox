@@ -12,7 +12,7 @@ export interface LayerOptions {
     transparentColor: string;
     colorTolerance: number;
     colorMode: boolean;
-    renderMode: 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette';
+    renderMode: 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette' | 'kinetic';
     posterize: number;
     clahe: boolean;
     frameDiff: boolean;
@@ -23,6 +23,7 @@ export interface LayerOptions {
     noise: number;
     overlayText: string;
     depthMode: boolean;
+    edgeThreshold: number;
 }
 
 export interface LayerTransform {

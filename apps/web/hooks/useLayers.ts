@@ -30,6 +30,7 @@ const DEFAULT_OPTIONS: LayerOptions = {
     noise: 0,
     overlayText: '',
     depthMode: false,
+    edgeThreshold: 30,
 };
 
 const DEFAULT_TRANSFORM: LayerTransform = {

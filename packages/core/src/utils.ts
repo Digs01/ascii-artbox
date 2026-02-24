@@ -2,7 +2,7 @@
 export const SIMPLE_CHARSET = " .:-=+*#%@";
 export const DENSE_CHARSET = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
 
-export type RenderMode = 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette';
+export type RenderMode = 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette' | 'kinetic';
 
 export interface Color {
     r: number;
@@ -88,6 +88,8 @@ export interface AsciiOptions {
     sharpen?: boolean; // Whether to apply sharpening
     blur?: number; // Optional blur sigma (0.5 - 5)
     noise?: number; // Optional noise level (0 - 100)
+    edgeThreshold?: number; // For edge detection render mode. Lower = more edges. Default 30.
+    overlayText?: string; // For kinetic typography render mode
 }
 
 export function getLuminance(r: number, g: number, b: number): number {

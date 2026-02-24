@@ -20,6 +20,8 @@ export async function POST(req: NextRequest) {
         const sharpen = formData.get('sharpen') === 'true';
         const blur = formData.get('blur') ? parseFloat(formData.get('blur') as string) : undefined;
         const noise = formData.get('noise') ? parseFloat(formData.get('noise') as string) : undefined;
+        const edgeThreshold = formData.get('edgeThreshold') ? parseFloat(formData.get('edgeThreshold') as string) : undefined;
+        const overlayText = formData.get('overlayText') as string | undefined;
 
         if (!file) {
             return NextResponse.json({ error: 'No file uploaded' }, { status: 400 });
@@ -42,6 +44,8 @@ export async function POST(req: NextRequest) {
             sharpen,
             blur,
             noise,
+            edgeThreshold,
+            overlayText,
         });
 
         return NextResponse.json({ ascii });

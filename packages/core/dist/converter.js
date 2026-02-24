@@ -46,6 +46,9 @@ async function imageToAscii(input, options = {}) {
     if (renderMode === 'silhouette') {
         return imageToSilhouette(input, options);
     }
+    if (renderMode === 'kinetic') {
+        return imageToKinetic(input, options);
+    }
     const { width = 100, height, charset = utils_1.SIMPLE_CHARSET, invert = false, transparentColor, colorTolerance = 30, colorMode = false, posterize, clahe: useClahe = false, dither = false, } = options;
     const transparentRgb = transparentColor ? (0, utils_1.hexToRgb)(transparentColor) : null;
     const image = (0, sharp_1.default)(input);
@@ -261,7 +264,7 @@ async function imageToBraille(input, options = {}) {
  * Maps edge direction to line characters for a sketch/contour effect.
  */
 async function imageToEdge(input, options = {}) {
-    const { width = 100, height, invert = false, colorMode = false, posterize, clahe: useClahe = false, } = options;
+    const { width = 100, height, invert = false, colorMode = false, posterize, clahe: useClahe = false, edgeThreshold = invert ? 20 : 30, } = options;
     const image = (0, sharp_1.default)(input);
     const metadata = await image.metadata();
     const targetWidth = width;
@@ -298,9 +301,8 @@ async function imageToEdge(input, options = {}) {
         return lum[y][x];
     };
     // Sobel kernels
-    // Gx: horizontal edges  Gy: vertical edges
+    // Gx: horizontal gradient (vertical edges) Gy: vertical gradient (horizontal edges)
     let result = '';
-    const edgeThreshold = invert ? 20 : 30; // Lower = more edges
     for (let y = 0; y < info.height; y++) {
         for (let x = 0; x < info.width; x++) {
             // Sobel X (detects vertical edges)
@@ -520,6 +522,80 @@ async function imageToSilhouette(input, options) {
         if ((i + 1) % w === 0) {
             result += '\n';
         }
+    }
+    return result;
+}
+/**
+ * Kinetic Typography Rendering.
+ * Maps brightness to 3D CSS transforms and inline character sizing.
+ */
+async function imageToKinetic(input, options) {
+    const { width = 80, height, invert = false, overlayText, colorMode = false, } = options;
+    const word = overlayText && overlayText.length > 0 ? overlayText : "KINETIC";
+    const image = (0, sharp_1.default)(input);
+    const metadata = await image.metadata();
+    const targetWidth = width;
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
+    if (options.clahe)
+        pipeline = pipeline.clahe({ width: 3, height: 3 });
+    if (options.sharpen)
+        pipeline = pipeline.sharpen();
+    if (options.blur)
+        pipeline = pipeline.blur(options.blur);
+    const { data, info } = await pipeline
+        .raw()
+        .ensureAlpha()
+        .toBuffer({ resolveWithObject: true });
+    let result = '';
+    let charIndex = 0;
+    for (let y = 0; y < info.height; y++) {
+        for (let x = 0; x < info.width; x++) {
+            const offset = (y * info.width + x) * 4;
+            const r = data[offset], g = data[offset + 1], b = data[offset + 2], a = data[offset + 3];
+            if (a < 10) {
+                result += ' ,0,1,0,0,0,0|';
+                charIndex++;
+                continue;
+            }
+            let lum = (0, utils_1.getLuminance)(r, g, b);
+            if (invert)
+                lum = 255 - lum;
+            // Map luminance to 3D parameters curve
+            const normalizedLum = lum / 255;
+            const curve = Math.pow(normalizedLum, 1.5);
+            const scale = 0.5 + (curve * 2.5); // 0.5 to 3.0
+            const z = (curve * 200) - 50; // -50px to 150px
+            const opacity = 0.1 + (curve * 0.9); // 0.1 to 1.0
+            let finalR = r, finalG = g, finalB = b;
+            if (colorMode || options.palette) {
+                if (options.palette) {
+                    const pColor = (0, utils_1.getColorFromPalette)((0, utils_1.getLuminance)(r, g, b), options.palette);
+                    if (pColor) {
+                        finalR = pColor.r;
+                        finalG = pColor.g;
+                        finalB = pColor.b;
+                    }
+                }
+            }
+            else {
+                finalR = 255;
+                finalG = 255;
+                finalB = 255; // Default white
+            }
+            const char = word[charIndex % word.length];
+            const finalChar = char === ' ' ? '&nbsp;' : char;
+            // Encode the 3D data efficiently instead of massive HTML spans
+            // Format: char,z,scale,opacity,r,g,b|
+            if (opacity < 0.15) {
+                result += finalChar + ',0,1,0,0,0,0|'; // Invisible
+            }
+            else {
+                result += `${finalChar},${z.toFixed(1)},${scale.toFixed(2)},${opacity.toFixed(2)},${finalR},${finalG},${finalB}|`;
+            }
+            charIndex++;
+        }
+        result += '\n'; // Keep newlines for row splitting
     }
     return result;
 }

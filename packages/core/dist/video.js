@@ -12,6 +12,8 @@ const util_1 = require("util");
 const mkdir = (0, util_1.promisify)(fs_1.default.mkdir);
 const readdir = (0, util_1.promisify)(fs_1.default.readdir);
 const writeFile = (0, util_1.promisify)(fs_1.default.writeFile);
+const readFile = (0, util_1.promisify)(fs_1.default.readFile);
+const unlink = (0, util_1.promisify)(fs_1.default.unlink);
 const rm = (0, util_1.promisify)(fs_1.default.rm);
 /**
  * Apply frame differencing: replace unchanged characters with spaces.
@@ -121,7 +123,9 @@ async function videoToAscii(inputPath, options) {
                 const files = (await readdir(tempDir)).sort();
                 const framesRequest = files.map(async (file) => {
                     const framePath = path_1.default.join(tempDir, file);
-                    const ascii = await (0, converter_1.imageToAscii)(framePath, asciiOptions);
+                    // Read to buffer first to avoid file lock issues on Windows
+                    const buffer = await readFile(framePath);
+                    const ascii = await (0, converter_1.imageToAscii)(buffer, asciiOptions);
                     return {
                         name: file.replace('.png', '.txt'),
                         content: ascii
@@ -140,11 +144,28 @@ async function videoToAscii(inputPath, options) {
                     }
                 }
                 // Cleanup temp dir
+                // On Windows, sometimes file handles take a moment to release
+                const cleanup = async (target, retries = 3) => {
+                    for (let i = 0; i < retries; i++) {
+                        try {
+                            await rm(target, { recursive: true, force: true });
+                            break;
+                        }
+                        catch (e) {
+                            if (e.code === 'EBUSY' && i < retries - 1) {
+                                await new Promise(resolve => setTimeout(resolve, 100 * (i + 1)));
+                            }
+                            else {
+                                throw e;
+                            }
+                        }
+                    }
+                };
                 if (!outputDir) {
-                    await rm(workDir, { recursive: true, force: true });
+                    await cleanup(workDir);
                 }
                 else {
-                    await rm(tempDir, { recursive: true, force: true });
+                    await cleanup(tempDir);
                 }
                 if (returnFrames) {
                     resolve(framesContent);

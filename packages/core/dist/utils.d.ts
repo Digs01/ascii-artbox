@@ -1,6 +1,6 @@
 export declare const SIMPLE_CHARSET = " .:-=+*#%@";
 export declare const DENSE_CHARSET = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
-export type RenderMode = 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette';
+export type RenderMode = 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette' | 'kinetic';
 export interface Color {
     r: number;
     g: number;
@@ -27,6 +27,8 @@ export interface AsciiOptions {
     sharpen?: boolean;
     blur?: number;
     noise?: number;
+    edgeThreshold?: number;
+    overlayText?: string;
 }
 export declare function getLuminance(r: number, g: number, b: number): number;
 export declare function getGlyph(luminance: number, charset?: string, invert?: boolean): string;

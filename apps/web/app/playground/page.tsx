@@ -112,6 +112,25 @@ function PlaygroundContent() {
   // Since we are in React, let's try passing metrics as state for now, updated in a loop.
   const [audioMetrics, setAudioMetrics] = useState<AudioMetrics | undefined>(undefined);
 
+  const [globalEffects, setGlobalEffects] = useState({
+    enable3D: false,
+    depthOffset: 40,
+    bloom: false,
+    bloomRadius: 8,
+    chromaticAberration: false,
+    aberrationOffset: 4,
+    crtScanlines: false,
+    scanlineWidth: 4,
+    scanlineOpacity: 0.2,
+    vignette: false,
+    vignetteIntensity: 0.8,
+    vignetteSize: 40,
+    fluidDynamics: false,
+    fluidForce: 8,
+    fluidRadius: 40,
+    fluidViscosity: 0.95
+  });
+
   // --- SEAMLESS RECORDER (Canvas) ---
   const { stream: canvasStream } = useAsciiCanvasRenderer({
     layers,
@@ -141,7 +160,6 @@ function PlaygroundContent() {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [undo, redo, canUndo, canRedo]);
-
   // Audio Analysis
   // Audio Analysis
   const { isListening, sourceType: audioSourceType, startMic, startFile: startAudioFile, stopAudio: stopAudioAnalysis, getAudioMetrics, outputStream } = useAudioAnalyzer();
@@ -212,6 +230,7 @@ function PlaygroundContent() {
   const [progress, setProgress] = useState(0);
 
   const [showEffects, setShowEffects] = useState(false);
+  const [showGlobalEffects, setShowGlobalEffects] = useState(false);
   const [isDraggingFile, setIsDraggingFile] = useState(false);
 
   // Save Modal State
@@ -223,17 +242,58 @@ function PlaygroundContent() {
   const options = activeLayer?.options || {} as any; // Safe fallback?
 
   // Helper to safely update options
-  const setOptions = (updater: (prev: LayerOptions) => LayerOptions) => {
+  const setOptions = useCallback((updater: (prev: LayerOptions) => LayerOptions) => {
     if (!activeLayerId || !activeLayer) return;
     const newOptions = updater(activeLayer.options);
     updateLayerOptions(activeLayerId, newOptions);
-  };
+  }, [activeLayer, activeLayerId, updateLayerOptions]);
+
+  // --- DYNAMIC CHARSET GENERATOR ---
+  const generateDensityCharset = useCallback((text: string) => {
+    const uniqueChars = Array.from(new Set(text.split('')));
+    if (uniqueChars.length < 2) {
+      toast('Not enough unique characters to sort', 'error');
+      return;
+    }
+
+    const canvas = document.createElement('canvas');
+    canvas.width = 20;
+    canvas.height = 20;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+
+    ctx.font = '20px monospace';
+    // Use strict letter spacing in case of proportional fonts, though we force monospace
+    ctx.textBaseline = 'top';
+
+    const measured = uniqueChars.map(char => {
+      ctx.fillStyle = 'white';
+      ctx.fillRect(0, 0, 20, 20);
+      ctx.fillStyle = 'black';
+      ctx.fillText(char, 2, 2);
+
+      const imgData = ctx.getImageData(0, 0, 20, 20).data;
+      let darkPixels = 0;
+      for (let i = 0; i < imgData.length; i += 4) {
+        if (imgData[i] < 128) darkPixels++;
+      }
+      return { char, density: darkPixels };
+    });
+
+    measured.sort((a, b) => a.density - b.density);
+    const sortedCharset = measured.map(m => m.char).join('');
+
+    // Always insert a space at the start for proper shadow/black mapping
+    const finalCharset = sortedCharset.startsWith(' ') ? sortedCharset : ' ' + sortedCharset.replace(' ', '');
+    setOptions(p => ({ ...p, charset: finalCharset }));
+    toast(`Charset sorted by density!`, 'success');
+  }, [setOptions, toast]);
 
   // Helper destructuring for active layer options
   const {
     width, inverted, videoFps, charset, color, customColor, fontSize, bgTheme,
     removeBackground, transparentColor, colorTolerance, colorMode, renderMode,
-    posterize, clahe, frameDiff, dither, palette, sharpen, blur, noise, overlayText, depthMode
+    posterize, clahe, frameDiff, dither, palette, sharpen, blur, noise, overlayText, depthMode, edgeThreshold
   } = options as LayerOptions || {}; // Fallback to empty
 
   const handleDragOver = (e: React.DragEvent) => { e.preventDefault(); setIsDraggingFile(true); };
@@ -331,6 +391,14 @@ function PlaygroundContent() {
 
     if (noise > 0) {
       formData.append('noise', noise.toString());
+    }
+
+    if (renderMode === 'edge' && edgeThreshold !== undefined) {
+      formData.append('edgeThreshold', edgeThreshold.toString());
+    }
+
+    if (renderMode === 'kinetic' && overlayText) {
+      formData.append('overlayText', overlayText);
     }
 
     // Check for video or gif
@@ -695,36 +763,56 @@ function PlaygroundContent() {
               <motion.div variants={item}>
                 <Card className="space-y-4 card-hover-animation">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Source</h3>
-                    <span className="text-[9px] text-text-secondary">{activeLayer.name}</span>
-                  </div>
-
-                  <div
-                    className={`relative group transition-all duration-200 ${isDraggingFile ? 'scale-[1.01]' : ''}`}
-                    onDragOver={handleDragOver}
-                    onDragLeave={handleDragLeave}
-                    onDrop={handleDrop}
-                  >
-                    <input type="file" accept="image/*,video/*" onChange={handleFileChange}
-                      className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
-                    <div className={clsx(
-                      "border border-dashed rounded-lg p-5 text-center transition-all",
-                      isDraggingFile
-                        ? 'border-accent-success bg-accent-success/5 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
-                        : 'border-border group-hover:border-border-hover'
-                    )}>
-                      {activeLayer.file ? (
-                        <div className="text-text-primary text-xs font-mono truncate">
-                          {activeLayer.file.name}
-                          <span className="block text-[10px] text-text-muted mt-1">{(activeLayer.file.size / 1024).toFixed(1)} KB</span>
-                        </div>
-                      ) : (
-                        <div className={clsx("text-xs", isDraggingFile ? 'text-accent-success' : 'text-text-muted')}>
-                          {isDraggingFile ? 'DROP FILE' : 'DROP IMAGE/VIDEO (Updates Active Layer)'}
-                        </div>
-                      )}
+                    <div className="flex items-center gap-3">
+                      <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Source</h3>
+                      <span className="text-[9px] text-text-secondary truncate max-w-[100px]">{activeLayer.name}</span>
+                    </div>
+                    <div className="flex gap-1 bg-black rounded p-0.5 border border-border">
+                      <button onClick={() => updateLayer(activeLayer.id, { type: 'image' })} className={clsx('px-2 py-1 rounded text-[9px] uppercase transition-colors', activeLayer.type !== 'text' ? 'bg-surface-active text-text-primary' : 'text-text-muted hover:text-text-primary')}>Media</button>
+                      <button onClick={() => updateLayer(activeLayer.id, { type: 'text' })} className={clsx('px-2 py-1 rounded text-[9px] uppercase transition-colors', activeLayer.type === 'text' ? 'bg-surface-active text-text-primary' : 'text-text-muted hover:text-text-primary')}>Text</button>
                     </div>
                   </div>
+
+                  {activeLayer.type === 'text' ? (
+                    <div className="space-y-3">
+                      <textarea
+                        value={options.overlayText || ''}
+                        onChange={(e) => setOptions(p => ({ ...p, overlayText: e.target.value }))}
+                        placeholder="TYPE MASSIVE TEXT HERE..."
+                        className="w-full h-32 bg-black border border-border rounded p-3 text-text-primary resize-none font-mono text-sm focus:border-accent-primary focus:ring-1 focus:ring-accent-primary transition-all"
+                      />
+                      <div className="text-[10px] text-text-muted leading-tight">
+                        <span className="text-accent-primary font-bold">PRO TIP:</span> Use this text layer as a <strong className="text-text-secondary">Clipping Mask</strong> over a video by setting its Blend Mode to "Multiply" in the Transform panel, and moving the text layer to the top.
+                      </div>
+                    </div>
+                  ) : (
+                    <div
+                      className={`relative group transition-all duration-200 ${isDraggingFile ? 'scale-[1.01]' : ''}`}
+                      onDragOver={handleDragOver}
+                      onDragLeave={handleDragLeave}
+                      onDrop={handleDrop}
+                    >
+                      <input type="file" accept="image/*,video/*" onChange={handleFileChange}
+                        className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
+                      <div className={clsx(
+                        "border border-dashed rounded-lg p-5 text-center transition-all",
+                        isDraggingFile
+                          ? 'border-accent-success bg-accent-success/5 shadow-[0_0_20px_rgba(34,197,94,0.1)]'
+                          : 'border-border group-hover:border-border-hover'
+                      )}>
+                        {activeLayer.file ? (
+                          <div className="text-text-primary text-xs font-mono truncate">
+                            {activeLayer.file.name}
+                            <span className="block text-[10px] text-text-muted mt-1">{(activeLayer.file.size / 1024).toFixed(1)} KB</span>
+                          </div>
+                        ) : (
+                          <div className={clsx("text-xs", isDraggingFile ? 'text-accent-success' : 'text-text-muted')}>
+                            {isDraggingFile ? 'DROP FILE' : 'DROP IMAGE/VIDEO (Updates Active Layer)'}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  )}
 
                   {activeLayer.previewUrl && activeLayer.file && (
                     <div className="mt-3 rounded-lg overflow-hidden border border-border bg-black">
@@ -755,6 +843,7 @@ function PlaygroundContent() {
                         { value: 'halfblock' as const, label: 'Pixel', icon: '▄▀' },
                         { value: 'edge' as const, label: 'Edge', icon: '╱╲' },
                         { value: 'silhouette' as const, label: 'Cutout', icon: '◐' },
+                        { value: 'kinetic' as const, label: 'Kinetic', icon: '3D' },
                       ].map(mode => (
                         <button key={mode.value} onClick={() => setOptions(p => ({ ...p, renderMode: mode.value }))}
                           className={clsx(
@@ -770,8 +859,49 @@ function PlaygroundContent() {
                     </div>
                   </div>
 
-                  <div className="space-y-4 pt-2 border-t border-border">
-                    <Slider label="Output Width" value={width || 100} min={20} max={240} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} ch`} />
+                  <div className="space-y-4 pt-4 border-t border-border">
+                    <div className="flex items-center justify-between">
+                      <label className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Character Set</label>
+                      <div className="flex gap-2">
+                        <button onClick={() => setOptions(p => ({ ...p, charset: " .:-=+*#%@" }))} className="text-[9px] text-text-muted hover:text-accent-primary uppercase tracking-wider">Standard</button>
+                        <button onClick={() => setOptions(p => ({ ...p, charset: " ░▒▓█" }))} className="text-[9px] text-text-muted hover:text-accent-primary uppercase tracking-wider">Blocks</button>
+                      </div>
+                    </div>
+
+                    <div className="flex gap-2">
+                      <input
+                        type="text"
+                        value={options.charset || ''}
+                        onChange={(e) => setOptions(p => ({ ...p, charset: e.target.value }))}
+                        placeholder="Type chars to use..."
+                        className="flex-1 bg-black border border-border rounded px-2 py-1.5 text-xs text-text-primary font-mono focus:border-accent-primary"
+                      />
+                      <Button variant="secondary" size="sm" onClick={() => generateDensityCharset(options.charset || '')} className="px-3" title="Auto-sort characters by visual density">
+                        Sort Density
+                      </Button>
+                    </div>
+                  </div>
+
+                  <div className="space-y-4 pt-4 border-t border-border">
+                    {renderMode === 'kinetic' && (
+                      <div className="space-y-2">
+                        <label className="text-[10px] text-accent-primary uppercase tracking-wider font-bold">Kinetic Input Word</label>
+                        <input
+                          type="text"
+                          value={options.overlayText || ''}
+                          onChange={(e) => setOptions(p => ({ ...p, overlayText: e.target.value.toUpperCase() }))}
+                          placeholder="E.g. FUTURE"
+                          className="w-full bg-black border border-border rounded px-2 py-1.5 text-xs text-text-primary font-mono focus:border-accent-primary"
+                        />
+                        <div className="text-[9px] text-text-muted">Words map brightness to 3D Z-depth and scale.</div>
+                      </div>
+                    )}
+                    {renderMode === 'edge' && (
+                      <Slider label="Edge Sensitivity" value={options.edgeThreshold || 30} min={5} max={100} onChange={(v) => setOptions(p => ({ ...p, edgeThreshold: v }))} valueDisplay={`${options.edgeThreshold || 30}`} />
+                    )}
+                    {(activeLayer?.file?.type.startsWith('image/') || renderMode === 'kinetic') && (
+                      <Slider label="Output Width" value={width} min={20} max={300} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} CH`} />
+                    )}
                     {(activeLayer.file?.type.startsWith('video/') || activeLayer.file?.name.toLowerCase().endsWith('.gif')) && (
                       <Slider label="Motion FPS" value={videoFps || 12} min={1} max={30} onChange={(v) => setOptions(p => ({ ...p, videoFps: v }))} valueDisplay={`${videoFps} FPS`} />
                     )}
@@ -854,7 +984,14 @@ function PlaygroundContent() {
                   </div>
 
                   <div className="grid grid-cols-2 gap-4 pt-2 border-t border-border">
-                    <Slider label="Font Size" value={fontSize || 8} min={4} max={20} onChange={(v) => setOptions(p => ({ ...p, fontSize: v }))} valueDisplay={`${fontSize}px`} />
+                    <Slider
+                      label="Font Size"
+                      value={fontSize || (activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 120 : 8)}
+                      min={activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 10 : 4}
+                      max={activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 400 : 30}
+                      onChange={(v) => setOptions(p => ({ ...p, fontSize: v }))}
+                      valueDisplay={`${fontSize || (activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 120 : 8)}px`}
+                    />
                   </div>
                 </Card>
               </motion.div>
@@ -1127,6 +1264,96 @@ function PlaygroundContent() {
                   )}
                 </Card>
               </motion.div>
+
+              {/* SECTION 5: GLOBAL EFFECTS */}
+              <motion.div variants={item}>
+                <Card className="p-0 overflow-hidden card-hover-animation pb-2">
+                  <button onClick={() => setShowGlobalEffects(!showGlobalEffects)}
+                    className="w-full px-5 py-4 flex items-center justify-between text-text-muted hover:text-text-primary transition-colors bg-surface-active/20">
+                    <div className="flex items-center gap-2">
+                      <span className="text-xs font-bold uppercase tracking-widest">5. Cinematic Effects</span>
+                      <span className="px-1.5 py-0.5 rounded-full bg-accent-primary/20 text-accent-primary text-[8px] font-mono">GLOBAL</span>
+                    </div>
+                    <span className="text-xs">{showGlobalEffects ? '▲' : '▼'}</span>
+                  </button>
+
+                  {showGlobalEffects && (
+                    <div className="p-5 space-y-4 border-t border-border">
+                      <div className="space-y-3">
+                        {[
+                          {
+                            id: 'enable3D', label: 'Interactive 3D Hologram', desc: 'Tilt composition with mouse depth',
+                            controls: [{ id: 'depthOffset', label: 'Z-Depth Pop', min: 10, max: 150, step: 5 }]
+                          },
+                          {
+                            id: 'chromaticAberration', label: 'RGB Aberration', desc: 'Cinematic color channel splitting',
+                            controls: [{ id: 'aberrationOffset', label: 'Split Distance', min: 1, max: 20, step: 1 }]
+                          },
+                          {
+                            id: 'bloom', label: 'Phosphor Bloom', desc: 'Glowing aura for bright characters',
+                            controls: [{ id: 'bloomRadius', label: 'Glow Radius', min: 2, max: 30, step: 1 }]
+                          },
+                          {
+                            id: 'crtScanlines', label: 'CRT Scanlines', desc: 'Vintage monitor interference',
+                            controls: [
+                              { id: 'scanlineWidth', label: 'Line Width', min: 1, max: 10, step: 1 },
+                              { id: 'scanlineOpacity', label: 'Opacity', min: 0.05, max: 0.8, step: 0.05 }
+                            ]
+                          },
+                          {
+                            id: 'vignette', label: 'Lens Vignette', desc: 'Darkened screen edges',
+                            controls: [
+                              { id: 'vignetteSize', label: 'Clear Center Size', min: 10, max: 100, step: 5 },
+                              { id: 'vignetteIntensity', label: 'Darkness', min: 0.1, max: 1, step: 0.1 }
+                            ]
+                          },
+                          {
+                            id: 'fluidDynamics', label: 'Interactive Fluid Dynamics', desc: 'Liquid displacement mapped to mouse',
+                            controls: [
+                              { id: 'fluidForce', label: 'Push Force', min: 1, max: 20, step: 1 },
+                              { id: 'fluidRadius', label: 'Ripple Radius', min: 10, max: 100, step: 5 },
+                              { id: 'fluidViscosity', label: 'Viscosity (Settle Time)', min: 0.7, max: 0.99, step: 0.01 }
+                            ]
+                          },
+                        ].map(effect => (
+                          <div key={effect.id} className="flex flex-col rounded-lg bg-surface/30 border border-border/50 hover:border-border transition-colors overflow-hidden">
+                            <div className="flex items-center justify-between p-3">
+                              <div>
+                                <div className="text-[10px] text-text-primary uppercase tracking-tight font-bold">{effect.label}</div>
+                                <div className="text-[9px] text-text-muted mt-0.5">{effect.desc}</div>
+                              </div>
+                              <input
+                                type="checkbox"
+                                checked={globalEffects[effect.id as keyof typeof globalEffects] as boolean}
+                                onChange={(e) => setGlobalEffects(p => ({ ...p, [effect.id]: e.target.checked }))}
+                                className="rounded-sm bg-black border-border text-accent-primary focus:ring-0 w-4 h-4 cursor-pointer"
+                              />
+                            </div>
+
+                            {/* Render Sliders if active */}
+                            {globalEffects[effect.id as keyof typeof globalEffects] && effect.controls && (
+                              <div className="p-3 pt-0 border-t border-border/30 bg-black/20 space-y-3 mt-2">
+                                {effect.controls.map(ctrl => (
+                                  <Slider
+                                    key={ctrl.id}
+                                    label={ctrl.label}
+                                    value={globalEffects[ctrl.id as keyof typeof globalEffects] as number}
+                                    min={ctrl.min}
+                                    max={ctrl.max}
+                                    step={ctrl.step}
+                                    onChange={(v) => setGlobalEffects(p => ({ ...p, [ctrl.id]: v }))}
+                                    valueDisplay={globalEffects[ctrl.id as keyof typeof globalEffects].toString()}
+                                  />
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+                </Card>
+              </motion.div>
             </motion.div>
           </motion.div>
 
@@ -1237,6 +1464,7 @@ function PlaygroundContent() {
                   globalFrameCount={globalFrameCount}
                   audioMetrics={audioMetrics}
                   isRecording={isRecording}
+                  globalEffects={globalEffects}
                 />
               </div>
 

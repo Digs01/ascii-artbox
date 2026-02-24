@@ -108,8 +108,61 @@ export function useAsciiCanvasRenderer({
             // Parsing & Layout
             const lineHeight = fontSize;
 
-            // Check if Color Mode (HTML)
-            if (layer.options.colorMode && frame.includes('<span')) {
+            // Check if Color Mode (HTML) or Kinetic Pipeline
+            if (layer.options.renderMode === 'kinetic') {
+                // Parse Kinetic Pipeline String: char,z,scale,opacity,r,g,b|
+                const lines = frame.split('\n');
+                const totalHeight = lines.length * lineHeight;
+                const startY = -totalHeight / 2;
+
+                // Center logic
+                let gridWidth = 0;
+                if (lines[0]) {
+                    const firstLineChars = lines[0].split('|').filter(Boolean).length;
+                    // Kinetic scales characters, so horizontal advance is tricky.
+                    // Assuming uniform grid width based on font size for layout:
+                    const charAdvance = ctx.measureText('A').width;
+                    gridWidth = firstLineChars * charAdvance;
+                }
+                const startX = -gridWidth / 2;
+
+                lines.forEach((line, i) => {
+                    const charDataBlocks = line.split('|').filter(Boolean);
+                    const lineY = startY + (i * lineHeight);
+                    let currentX = startX;
+
+                    for (let c = 0; c < charDataBlocks.length; c++) {
+                        const block = charDataBlocks[c];
+                        const parts = block.split(',');
+                        if (parts.length === 7) {
+                            const char = parts[0] === '&nbsp;' ? ' ' : parts[0];
+                            const z = parseFloat(parts[1]);
+                            const letterScale = parseFloat(parts[2]);
+                            const op = parseFloat(parts[3]);
+                            const r = parseInt(parts[4]);
+                            const g = parseInt(parts[5]);
+                            const b = parseInt(parts[6]);
+
+                            if (op > 0.05 && char !== ' ') {
+                                ctx.save();
+                                // We simulate Z-depth via parallax translation if enable3d was passed,
+                                // but for raw performance we rely on the pre-calculated scale
+                                ctx.translate(currentX, lineY);
+                                ctx.scale(letterScale, letterScale);
+
+                                ctx.globalAlpha = opacity * op; // Combined Opacity
+                                ctx.fillStyle = `rgb(${r},${g},${b})`;
+                                ctx.fillText(char, 0, 0);
+
+                                ctx.restore();
+                            }
+                        }
+                        // Advance cursor by fixed character width, not scaled width, to maintain grid
+                        currentX += ctx.measureText('A').width;
+                    }
+                });
+            }
+            else if (layer.options.colorMode && frame.includes('<span')) {
                 // Complex HTML Parsing (Basic)
                 // We split by newlines first to manage Y position
                 // But since spans can wrap lines (rare in this generator?), assume strict structure from converter:
