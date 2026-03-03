@@ -2,6 +2,7 @@
 
 import { clsx } from 'clsx';
 import { motion, AnimatePresence } from 'framer-motion';
+import { X, Play, Image as ImageIcon, Film, FileText, Code, Check, Video, LayoutList, Pipette } from 'lucide-react';
 import { useState, useRef, useCallback, useEffect } from 'react';
 import { AsciiAnimation } from '@asciiweb/react';
 import { Card } from '../../components/ui/Card';
@@ -14,6 +15,7 @@ import { LayerManager } from '../../components/playground/LayerManager';
 import { PresetLibrary } from '../../components/playground/PresetLibrary';
 import { GistManager } from '../../components/playground/GistManager';
 import { PRESETS, Preset } from '../../config/presets';
+import { getInterpolatedValue } from '../../utils/interpolation';
 
 import { Layer, LayerOptions } from '../../types/layer';
 import { useAudioAnalyzer, AudioMetrics } from '../../hooks/useAudioAnalyzer';
@@ -21,8 +23,12 @@ import { AudioControlPanel } from '../../components/playground/AudioControlPanel
 import { useScreenRecorder } from '../../hooks/useScreenRecorder';
 import { useAsciiCanvasRenderer } from '../../hooks/useAsciiCanvasRenderer';
 import { CompositionCanvas } from '../../components/playground/CompositionCanvas';
+import { Timeline } from '../../components/playground/Timeline';
+import { NodeEditor } from '../../components/playground/NodeEditor';
+import { useNodeGraph } from '../../hooks/useNodeGraph';
 import html2canvas from 'html2canvas';
 import { useGifExport } from '../../hooks/useGifExport';
+import { downloadReactComponent } from '../../utils/exportReactComponent';
 
 const DEFAULT_CHARSET = " .:-=+*#%@";
 const DENSE_CHARSET = "@%#*+=-:. ";
@@ -89,12 +95,22 @@ function PlaygroundContent() {
     setLayerAscii,
     commitLayerTransform,
     replaceLayerOptions,
+    addKeyframe,
+    removeKeyframe,
+    updateKeyframe,
     undo, redo, canUndo, canRedo
   } = useLayers();
 
+  // Node Graph Hook
+  const nodeGraph = useNodeGraph();
+  const [bottomPanel, setBottomPanel] = useState<'timeline' | 'nodes'>('timeline');
+  const [nodeEvalValues, setNodeEvalValues] = useState<Record<string, any>>({});
+
   // Animation State
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [globalFrameCount, setGlobalFrameCount] = useState(0);
+  const [isPlaying, setIsPlaying] = useState(false);
+  const [currentTime, setCurrentTime] = useState(0); // in seconds
+  const [maxDuration, setMaxDuration] = useState(5); // in seconds
+  const globalFrameCount = Math.floor(currentTime * 24); // Derived at 24fps for standard sync
   const animationRef = useRef<number>();
   // Audio State
   const audioAnalyzer = useAudioAnalyzer();
@@ -137,6 +153,7 @@ function PlaygroundContent() {
     width: 800,
     height: 600,
     globalFrameCount,
+    currentTime,
     audioMetrics,
     backgroundColor: activeLayer?.options.bgTheme?.bg || '#111111'
   });
@@ -188,25 +205,48 @@ function PlaygroundContent() {
     if (!isPlaying) return;
 
     let lastTime = performance.now();
-    let frameAccumulator = 0;
-    const asciiFps = 12;
-    const interval = 1000 / asciiFps;
+    let lastFrameTime = performance.now();
+    const fps = activeLayer?.options?.videoFps || 12;
+    const interval = 1000 / fps;
 
     const loop = () => {
       const now = performance.now();
       const delta = now - lastTime;
+      const deltaSec = delta / 1000;
+      const frameDelta = now - lastFrameTime;
+
+      // Update Playhead Time (Keyframing Engine)
+      setCurrentTime(prev => {
+        let nextTime = prev + deltaSec;
+        if (nextTime > maxDuration) {
+          nextTime = 0; // Loop playback
+        }
+        return nextTime;
+      });
 
       // Update ASCII Frame Count
-      if (delta >= interval) {
-        setGlobalFrameCount(c => c + 1);
-        lastTime = now;
+      // We no longer manually increment setGlobalFrameCount here.
+      // globalFrameCount is now derived from currentTime.
+      if (frameDelta >= interval) {
+        lastFrameTime = now;
       }
+
+      lastTime = now;
 
       // Update Audio Metrics (High FPS)
       if (audioAnalyzer.isListening) {
-        // We set state here, triggering re-render of page -> canvas.
-        // This might be heavy. Let's see. 
         setAudioMetrics(audioAnalyzer.getAudioMetrics());
+      }
+
+      // Evaluate Node Graph
+      if (nodeGraph.graph.nodes.length > 0) {
+        const evaluated = nodeGraph.evaluate({
+          currentTime: performance.now() / 1000,
+          maxDuration,
+          globalFrameCount,
+          audioMetrics: audioAnalyzer.isListening ? audioAnalyzer.getAudioMetrics() : undefined,
+        });
+        setNodeEvalValues(evaluated);
       }
 
       animationRef.current = requestAnimationFrame(loop);
@@ -214,7 +254,7 @@ function PlaygroundContent() {
 
     animationRef.current = requestAnimationFrame(loop);
     return () => cancelAnimationFrame(animationRef.current!);
-  }, [isPlaying, audioAnalyzer.isListening]); // Re-bind if listening changes to ensure loop catches it
+  }, [isPlaying, audioAnalyzer.isListening, activeLayer?.options?.videoFps]);
 
   // Initialize with one layer if empty
   // Initialize with one layer if empty
@@ -304,14 +344,18 @@ function PlaygroundContent() {
     setIsDraggingFile(false);
     if (e.dataTransfer.files && e.dataTransfer.files[0]) {
       const f = e.dataTransfer.files[0];
+      const isModel = f.name.toLowerCase().endsWith('.obj') || f.name.toLowerCase().endsWith('.glb') || f.name.toLowerCase().endsWith('.gltf');
+      const isVideoExt = /\.(mp4|webm|avi|mov|mkv|gif)$/i.test(f.name);
+      const extType = isModel ? 'model' : (f.type.startsWith('video/') || isVideoExt ? 'video' : 'image');
+
       // Add as new layer or update current?
       // UX Decision: If current layer is empty (no file), update it. Else add new.
       if (activeLayer && !activeLayer.file) {
         updateLayer(activeLayer.id, {
           file: f,
           name: f.name,
-          previewUrl: URL.createObjectURL(f),
-          type: f.type.startsWith('video/') ? 'video' : 'image'
+          previewUrl: isModel ? null : URL.createObjectURL(f),
+          type: extType
         });
       } else {
         addLayer(f);
@@ -322,13 +366,17 @@ function PlaygroundContent() {
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
     if (e.target.files && e.target.files[0]) {
       const f = e.target.files[0];
+      const isModel = f.name.toLowerCase().endsWith('.obj') || f.name.toLowerCase().endsWith('.glb') || f.name.toLowerCase().endsWith('.gltf');
+      const isVideoExt = /\.(mp4|webm|avi|mov|mkv|gif)$/i.test(f.name);
+      const extType = isModel ? 'model' : (f.type.startsWith('video/') || isVideoExt ? 'video' : 'image');
+
       if (activeLayer) {
         // Update current layer
         updateLayer(activeLayer.id, {
           file: f,
           name: f.name,
-          previewUrl: URL.createObjectURL(f),
-          type: f.type.startsWith('video/') ? 'video' : 'image',
+          previewUrl: isModel ? null : URL.createObjectURL(f),
+          type: extType,
           frames: [] // Reset frames
         });
       } else {
@@ -402,8 +450,8 @@ function PlaygroundContent() {
     }
 
     // Check for video or gif
-    const isGif = activeLayer.file.type === 'image/gif' || activeLayer.file.name.toLowerCase().endsWith('.gif');
-    const isVideo = activeLayer.file.type.startsWith('video/') || isGif;
+    const isVideoExt = /\.(mp4|webm|avi|mov|mkv|gif)$/i.test(activeLayer.file.name);
+    const isVideo = activeLayer.file.type.startsWith('video/') || isVideoExt;
     if (isVideo) {
       formData.append('fps', videoFps.toString());
       if (frameDiff) formData.append('frameDiff', 'true');
@@ -457,7 +505,9 @@ function PlaygroundContent() {
             fontSize,
             lineHeight: fontSize + 2,
             color,
-            backgroundColor: bgTheme.bg === 'transparent' ? '#000000' : bgTheme.bg
+            backgroundColor: bgTheme.bg === 'transparent' ? '#000000' : bgTheme.bg,
+            width: 1920,
+            height: 1080
           })
         });
         if (!response.ok) throw new Error((await response.json()).error);
@@ -496,11 +546,11 @@ function PlaygroundContent() {
           transform: l.transform
         })),
         options: {
-          width: 800, // TODO: Make dynamic based on canvas size
-          height: 600,
-          backgroundColor: '#000000', // Canvas background
-          fps: 12, // Global FPS
-          duration: 5 // Default 5s or calculcated
+          width: 1920, // High fidelity 1080p export
+          height: 1080,
+          backgroundColor: options.bgTheme?.bg === 'transparent' ? '#000000' : (options.bgTheme?.bg || '#000000'),
+          fps: Number(options.videoFps) || 12, // Use global video FPS
+          // Let the backend dynamically calculate max duration based on layers
         }
       };
 
@@ -720,7 +770,7 @@ function PlaygroundContent() {
 
             {/* TOP ACTIONS */}
             <motion.div variants={item} className="space-y-3 pb-2">
-              <Button onClick={generate} disabled={!activeLayer.file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)]" isLoading={loading} variant="primary">
+              <Button onClick={generate} disabled={!activeLayer.file || loading} className="w-full h-12 text-sm font-bold tracking-[0.2em] shadow-[0_0_30px_rgba(34,197,94,0.15)] transition-all hover:scale-[1.02]" isLoading={loading} variant="primary">
                 {loading ? 'PROCESSING...' : 'GENERATE ASCII'}
               </Button>
               {loading && (
@@ -792,7 +842,7 @@ function PlaygroundContent() {
                       onDragLeave={handleDragLeave}
                       onDrop={handleDrop}
                     >
-                      <input type="file" accept="image/*,video/*" onChange={handleFileChange}
+                      <input type="file" accept="image/*,video/*,.obj,.gltf,.glb" onChange={handleFileChange}
                         className="absolute inset-0 w-full h-full opacity-0 cursor-pointer z-10" />
                       <div className={clsx(
                         "border border-dashed rounded-lg p-5 text-center transition-all",
@@ -807,7 +857,7 @@ function PlaygroundContent() {
                           </div>
                         ) : (
                           <div className={clsx("text-xs", isDraggingFile ? 'text-accent-success' : 'text-text-muted')}>
-                            {isDraggingFile ? 'DROP FILE' : 'DROP IMAGE/VIDEO (Updates Active Layer)'}
+                            {isDraggingFile ? 'DROP FILE' : 'DROP IMAGE / VIDEO / 3D MODEL (.obj, .gltf, .glb)'}
                           </div>
                         )}
                       </div>
@@ -826,16 +876,135 @@ function PlaygroundContent() {
                 </Card>
               </motion.div>
 
+              {/* MODEL CONTROLS — shown only for 3D model layers */}
+              {activeLayer.type === 'model' && activeLayer.file && (
+                <motion.div variants={item}>
+                  <Card className="space-y-4 card-hover-animation border border-accent-primary/20 bg-accent-primary/5">
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-xs font-bold text-accent-primary uppercase tracking-widest">3D ASCII Point Cloud</h3>
+                      <span className="px-1.5 py-0.5 rounded text-[8px] font-bold bg-accent-primary/20 text-accent-primary">NEW</span>
+                    </div>
 
+                    {/* Mode toggle */}
+                    <div className="space-y-2">
+                      <label className="block text-[10px] text-text-muted uppercase tracking-wider font-bold">Render Mode</label>
+                      <div className="flex gap-1 bg-black rounded p-0.5 border border-border">
+                        <button
+                          onClick={() => setOptions(p => ({ ...p, modelRenderMode: 'ascii-point-cloud' }))}
+                          className={clsx('flex-1 px-2 py-1.5 rounded text-[10px] font-bold uppercase transition-colors',
+                            (options.modelRenderMode ?? 'ascii-point-cloud') === 'ascii-point-cloud'
+                              ? 'bg-accent-primary text-black'
+                              : 'text-text-muted hover:text-text-primary')}
+                        >
+                          ASCII Point Cloud
+                        </button>
+                        <button
+                          onClick={() => setOptions(p => ({ ...p, modelRenderMode: 'viewport' }))}
+                          className={clsx('flex-1 px-2 py-1.5 rounded text-[10px] font-bold uppercase transition-colors',
+                            options.modelRenderMode === 'viewport'
+                              ? 'bg-surface-active text-text-primary'
+                              : 'text-text-muted hover:text-text-primary')}
+                        >
+                          3D Viewport
+                        </button>
+                      </div>
+                    </div>
+
+                    {(options.modelRenderMode ?? 'ascii-point-cloud') === 'ascii-point-cloud' && (
+                      <>
+                        {/* Auto-rotate */}
+                        <div className="flex justify-between items-center">
+                          <div>
+                            <div className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Auto-Rotate</div>
+                            <div className="text-[9px] text-text-secondary">Drag canvas to rotate manually</div>
+                          </div>
+                          <input
+                            type="checkbox"
+                            checked={options.modelAutoRotate ?? true}
+                            onChange={(e) => setOptions(p => ({ ...p, modelAutoRotate: e.target.checked }))}
+                            className="w-4 h-4 rounded bg-black border-border accent-accent-primary cursor-pointer"
+                          />
+                        </div>
+
+                        {/* Charset for point cloud */}
+                        <div className="space-y-1">
+                          <label className="block text-[10px] text-text-muted uppercase tracking-wider font-bold">Character Density Map</label>
+                          <div className="flex gap-2">
+                            <input
+                              type="text"
+                              value={options.charset || ' .:-=+*#%@'}
+                              onChange={(e) => setOptions(p => ({ ...p, charset: e.target.value }))}
+                              className="flex-1 bg-black border border-border rounded px-2 py-1 text-xs text-text-primary font-mono focus:border-accent-primary transition-colors"
+                            />
+                          </div>
+                          <div className="flex gap-1 flex-wrap mt-1">
+                            {[
+                              { label: 'Classic', value: ' .:-=+*#%@' },
+                              { label: 'Matrix', value: ' ░▒▓█' },
+                              { label: 'Binary', value: ' 01' },
+                              { label: 'Braille', value: '⣀⣄⣤⣦⣶⣷⣿' },
+                            ].map(p => (
+                              <button key={p.label}
+                                onClick={() => setOptions(opt => ({ ...opt, charset: p.value }))}
+                                className="text-[9px] px-2 py-0.5 border border-border rounded hover:border-accent-primary hover:text-accent-primary text-text-muted transition-colors"
+                              >{p.label}</button>
+                            ))}
+                          </div>
+                        </div>
+
+                        {/* Font size */}
+                        <Slider
+                          label="Point Density (Font Size)"
+                          value={options.fontSize || 10}
+                          min={4}
+                          max={24}
+                          step={1}
+                          onChange={(v) => setOptions(p => ({ ...p, fontSize: v }))}
+                          valueDisplay={`${options.fontSize || 10}px`}
+                        />
+
+                        {/* Color */}
+                        <div className="space-y-2">
+                          <label className="block text-[10px] text-text-muted uppercase tracking-wider font-bold">Point Color</label>
+                          <div className="flex gap-2 h-9">
+                            <div className="relative flex-1 rounded border border-border overflow-hidden">
+                              <input
+                                type="color"
+                                value={options.color || '#00ff00'}
+                                onChange={(e) => setOptions(p => ({ ...p, color: e.target.value }))}
+                                className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+                              />
+                              <div className="w-full h-full flex items-center justify-center" style={{ background: options.color || '#00ff00' }}>
+                                <span className="text-xs font-mono font-bold mix-blend-difference text-white pointer-events-none">{options.color || '#00ff00'}</span>
+                              </div>
+                            </div>
+                            {['#00ff00', '#00ffff', '#ff6ec7', '#ffb000', '#ffffff'].map(c => (
+                              <button key={c}
+                                onClick={() => setOptions(p => ({ ...p, color: c }))}
+                                className={clsx('w-9 h-9 rounded border transition-all', options.color === c ? 'border-2 border-white scale-110' : 'border-border hover:border-white/50')}
+                                style={{ background: c }}
+                              />
+                            ))}
+                          </div>
+                        </div>
+                      </>
+                    )}
+
+                    <div className="pt-1 text-[10px] text-text-muted border-t border-border/50">
+                      <span className="text-accent-primary font-bold">TIP:</span> Drag the canvas to rotate. Each vertex is lit by surface normals — bright faces = dense chars.
+                    </div>
+                  </Card>
+                </motion.div>
+              )}
 
 
               {/* SECTION 2: ENGINE */}
               <motion.div variants={item}>
-                <Card className="space-y-5 card-hover-animation">
-                  <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Generative Engine</h3>
+                <Card className="space-y-6 card-hover-animation">
+                  <h3 className="text-sm font-bold text-text-muted uppercase tracking-widest">Generative Engine</h3>
 
                   <div>
-                    <label className="block text-[10px] text-text-muted mb-2 uppercase tracking-wider font-bold">Render Algorithm</label>
+                    <label className="block text-xs text-text-muted mb-3 uppercase tracking-wider font-bold">Render Algorithm</label>
                     <div className="flex gap-1 flex-wrap">
                       {[
                         { value: 'standard' as const, label: 'Mode', icon: 'Aa' },
@@ -847,24 +1016,24 @@ function PlaygroundContent() {
                       ].map(mode => (
                         <button key={mode.value} onClick={() => setOptions(p => ({ ...p, renderMode: mode.value }))}
                           className={clsx(
-                            "flex-1 min-w-[55px] flex flex-col items-center py-1.5 rounded border-2 transition-all",
+                            "flex-1 min-w-[55px] flex flex-col items-center py-2 rounded border-2 transition-all cursor-pointer",
                             renderMode === mode.value
                               ? 'border-accent-success bg-accent-success/5 text-text-primary shadow-[0_0_10px_rgba(34,197,94,0.1)]'
-                              : 'border-surface bg-surface/50 hover:border-border text-text-muted hover:text-text-secondary'
+                              : 'border-surface bg-surface/50 hover:border-border hover:bg-surface text-text-muted hover:text-text-secondary'
                           )}>
                           <div className="text-sm">{mode.icon}</div>
-                          <div className="text-[8px] font-bold uppercase tracking-tight leading-none mt-0.5">{mode.label}</div>
+                          <div className="text-[10px] font-bold uppercase tracking-tight leading-none mt-1">{mode.label}</div>
                         </button>
                       ))}
                     </div>
                   </div>
 
-                  <div className="space-y-4 pt-4 border-t border-border">
+                  <div className="space-y-4 pt-5 border-t border-border">
                     <div className="flex items-center justify-between">
-                      <label className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Character Set</label>
-                      <div className="flex gap-2">
-                        <button onClick={() => setOptions(p => ({ ...p, charset: " .:-=+*#%@" }))} className="text-[9px] text-text-muted hover:text-accent-primary uppercase tracking-wider">Standard</button>
-                        <button onClick={() => setOptions(p => ({ ...p, charset: " ░▒▓█" }))} className="text-[9px] text-text-muted hover:text-accent-primary uppercase tracking-wider">Blocks</button>
+                      <label className="text-xs text-text-muted uppercase tracking-wider font-bold">Character Set</label>
+                      <div className="flex gap-3">
+                        <button onClick={() => setOptions(p => ({ ...p, charset: " .:-=+*#%@" }))} className="text-[10px] font-bold text-text-muted hover:text-accent-primary uppercase tracking-wider cursor-pointer">Standard</button>
+                        <button onClick={() => setOptions(p => ({ ...p, charset: " ░▒▓█" }))} className="text-[10px] font-bold text-text-muted hover:text-accent-primary uppercase tracking-wider cursor-pointer">Blocks</button>
                       </div>
                     </div>
 
@@ -874,26 +1043,26 @@ function PlaygroundContent() {
                         value={options.charset || ''}
                         onChange={(e) => setOptions(p => ({ ...p, charset: e.target.value }))}
                         placeholder="Type chars to use..."
-                        className="flex-1 bg-black border border-border rounded px-2 py-1.5 text-xs text-text-primary font-mono focus:border-accent-primary"
+                        className="flex-1 bg-black border border-border rounded px-3 py-2 text-sm text-text-primary font-mono focus:border-accent-primary transition-colors"
                       />
-                      <Button variant="secondary" size="sm" onClick={() => generateDensityCharset(options.charset || '')} className="px-3" title="Auto-sort characters by visual density">
+                      <Button variant="secondary" size="sm" onClick={() => generateDensityCharset(options.charset || '')} className="px-4" title="Auto-sort characters by visual density">
                         Sort Density
                       </Button>
                     </div>
                   </div>
 
-                  <div className="space-y-4 pt-4 border-t border-border">
+                  <div className="space-y-5 pt-5 border-t border-border">
                     {renderMode === 'kinetic' && (
                       <div className="space-y-2">
-                        <label className="text-[10px] text-accent-primary uppercase tracking-wider font-bold">Kinetic Input Word</label>
+                        <label className="text-xs text-accent-primary uppercase tracking-wider font-bold">Kinetic Input Word</label>
                         <input
                           type="text"
                           value={options.overlayText || ''}
                           onChange={(e) => setOptions(p => ({ ...p, overlayText: e.target.value.toUpperCase() }))}
                           placeholder="E.g. FUTURE"
-                          className="w-full bg-black border border-border rounded px-2 py-1.5 text-xs text-text-primary font-mono focus:border-accent-primary"
+                          className="w-full bg-black border border-border rounded px-3 py-2 text-sm text-text-primary font-mono focus:border-accent-primary transition-colors"
                         />
-                        <div className="text-[9px] text-text-muted">Words map brightness to 3D Z-depth and scale.</div>
+                        <div className="text-[11px] text-text-muted mt-1">Words map brightness to 3D Z-depth and scale.</div>
                       </div>
                     )}
                     {renderMode === 'edge' && (
@@ -911,27 +1080,27 @@ function PlaygroundContent() {
 
               {/* SECTION 3: STYLE */}
               <motion.div variants={item}>
-                <Card className="space-y-5 card-hover-animation">
+                <Card className="space-y-6 card-hover-animation">
                   <div className="flex items-center justify-between">
-                    <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Style</h3>
-                    <Button variant="ghost" size="sm" onClick={() => setShowPresetLibrary(true)} className="h-5 px-2 text-[9px] border border-border hover:border-accent-primary hover:text-accent-primary">
+                    <h3 className="text-sm font-bold text-text-muted uppercase tracking-widest">Style</h3>
+                    <Button variant="ghost" size="sm" onClick={() => setShowPresetLibrary(true)} className="h-6 px-3 text-[10px] font-bold border border-border hover:border-accent-primary hover:text-accent-primary">
                       LIBRARY
                     </Button>
                   </div>
 
                   {/* Background Theme */}
-                  <div className="space-y-2">
-                    <label className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Canvas Background</label>
-                    <div className="grid grid-cols-2 gap-2">
+                  <div className="space-y-3">
+                    <label className="text-xs text-text-muted uppercase tracking-wider font-bold">Canvas Background</label>
+                    <div className="grid grid-cols-2 gap-3">
                       {BG_THEMES.map(theme => (
                         <button
                           key={theme.label}
                           onClick={() => setOptions(p => ({ ...p, bgTheme: theme }))}
                           className={clsx(
-                            "py-1.5 rounded border text-[9px] truncate transition-colors",
+                            "py-2 px-3 rounded text-xs font-bold truncate transition-colors cursor-pointer text-center",
                             options.bgTheme?.label === theme.label
-                              ? "border-accent-success text-text-primary bg-surface-active"
-                              : "border-border text-text-muted hover:border-border-hover hover:text-text-primary"
+                              ? "border-2 border-accent-success text-white bg-surface-active"
+                              : "border border-border text-text-muted hover:border-border-hover hover:text-text-primary bg-black"
                           )}
                         >
                           {theme.label}
@@ -941,56 +1110,88 @@ function PlaygroundContent() {
                   </div>
 
                   {/* Palette & Color Group */}
-                  <div className="space-y-4 border-t border-border pt-4">
+                  <div className="space-y-5 border-t border-border pt-5">
                     {/* Real-time Color Control */}
-                    <div className="space-y-3">
-                      <div className="flex justify-between items-center">
-                        <label className="text-[10px] text-text-muted uppercase tracking-wider font-bold">Color Override</label>
-                        <input type="checkbox" checked={options.colorMode || false} onChange={(e) => setOptions(p => ({ ...p, colorMode: e.target.checked }))}
-                          className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
+                    <div className="space-y-4">
+                      <div className="flex justify-between items-center cursor-pointer group" onClick={() => setOptions(p => ({ ...p, colorMode: !p.colorMode }))}>
+                        <div className="flex flex-col">
+                          <label className="text-xs text-text-muted uppercase tracking-wider font-bold cursor-pointer group-hover:text-text-primary transition-colors">Extract Original Colors</label>
+                          <span className="text-[11px] text-text-secondary mt-0.5 pointer-events-none">Use source image pixel colors</span>
+                        </div>
+                        <input type="checkbox" checked={options.colorMode || false} readOnly
+                          className="rounded flex-shrink-0 w-4 h-4 bg-black border-border cursor-pointer text-accent-success focus:ring-0 focus:ring-offset-0" />
                       </div>
 
-                      {(options.colorMode) && (
-                        <div className="flex gap-2 h-8">
-                          {/* Native Picker */}
-                          <div className="relative flex-1 group">
-                            <input
-                              type="color"
-                              value={options.color || '#ffffff'}
-                              onChange={(e) => replaceLayerOptions(activeLayer.id, { color: e.target.value, customColor: e.target.value, palette: undefined })}
-                              onBlur={(e) => updateLayerOptions(activeLayer.id, { color: e.target.value })}
-                              className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
-                            />
-                            <div className="w-full h-full rounded border border-border group-hover:border-border-hover flex items-center justify-center transition-colors"
-                              style={{ backgroundColor: options.color || '#ffffff' }}
-                            >
-                              <span className="text-[9px] font-mono mix-blend-difference text-white/80">{options.color || '#ffffff'}</span>
+                      {(!options.colorMode) && (
+                        <div className="space-y-3 pt-2">
+                          <label className="text-xs text-text-muted uppercase tracking-wider font-bold">Solid Color Override</label>
+                          <div className="flex gap-3 h-10">
+                            {/* Color Picker & Eyedropper Group */}
+                            <div className="flex flex-1 rounded border border-border group-hover:border-border-hover shadow-sm overflow-hidden transition-colors">
+                              {/* Native Picker */}
+                              <div className="relative flex-1 group/picker focus-within:ring-2 focus-within:ring-accent-primary">
+                                <input
+                                  type="color"
+                                  value={options.color || '#ffffff'}
+                                  onChange={(e) => replaceLayerOptions(activeLayer.id, { color: e.target.value, customColor: e.target.value, palette: undefined })}
+                                  onBlur={(e) => updateLayerOptions(activeLayer.id, { color: e.target.value })}
+                                  className="absolute inset-0 opacity-0 w-full h-full cursor-pointer z-10"
+                                />
+                                <div className="w-full h-full flex items-center justify-center transition-colors shadow-inner"
+                                  style={{ backgroundColor: getInterpolatedValue(activeLayer.animationTracks || [], 'options.color', currentTime, options.color || '#ffffff') }}
+                                >
+                                  <span className="text-xs font-mono font-bold mix-blend-difference text-white/90 drop-shadow-md pointer-events-none">{getInterpolatedValue(activeLayer.animationTracks || [], 'options.color', currentTime, options.color || '#ffffff')}</span>
+                                </div>
+                              </div>
+                              {/* Eyedropper Button */}
+                              <button
+                                onClick={async () => {
+                                  try {
+                                    if ('EyeDropper' in window) {
+                                      const eyeDropper = new (window as any).EyeDropper();
+                                      const result = await eyeDropper.open();
+                                      replaceLayerOptions(activeLayer.id, { color: result.sRGBHex, customColor: result.sRGBHex, palette: undefined });
+                                      updateLayerOptions(activeLayer.id, { color: result.sRGBHex });
+                                    } else {
+                                      alert('Color picker not supported in this browser.');
+                                    }
+                                  } catch (e) {
+                                    // User canceled eyedropper
+                                  }
+                                }}
+                                className="w-10 flex items-center justify-center bg-surface hover:bg-surface-hover text-text-muted hover:text-text-primary transition-colors border-l border-border"
+                                title="Pick color from screen"
+                              >
+                                <Pipette size={16} />
+                              </button>
+                            </div>
+
+                            {/* Quick Swatches */}
+                            <div className="flex gap-2 isolate">
+                              {COLOR_PRESETS.slice(0, 4).map(c => (
+                                <button
+                                  key={c.value}
+                                  onClick={() => setOptions(p => ({ ...p, color: c.value, customColor: c.value, palette: undefined }))}
+                                  className={clsx("w-10 h-10 rounded border transition-all cursor-pointer shadow-sm relative", options.color === c.value ? 'border-2 border-white scale-110 z-10' : 'border-border hover:border-white/50 hover:scale-105')}
+                                  style={{ backgroundColor: c.value }}
+                                  title={c.label}
+                                />
+                              ))}
                             </div>
                           </div>
-
-                          {/* Quick Swatches */}
-                          {COLOR_PRESETS.slice(0, 4).map(c => (
-                            <button
-                              key={c.value}
-                              onClick={() => setOptions(p => ({ ...p, color: c.value, customColor: c.value, palette: undefined }))}
-                              className="w-8 h-8 rounded border border-border hover:border-white transition-all transform hover:scale-105"
-                              style={{ backgroundColor: c.value }}
-                              title={c.label}
-                            />
-                          ))}
                         </div>
                       )}
                     </div>
                   </div>
 
-                  <div className="grid grid-cols-2 gap-4 pt-2 border-t border-border">
+                  <div className="grid grid-cols-2 gap-5 pt-4 border-t border-border">
                     <Slider
                       label="Font Size"
-                      value={fontSize || (activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 120 : 8)}
+                      value={getInterpolatedValue(activeLayer.animationTracks || [], 'options.fontSize', currentTime, fontSize || (activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 120 : 8))}
                       min={activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 10 : 4}
                       max={activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 400 : 30}
                       onChange={(v) => setOptions(p => ({ ...p, fontSize: v }))}
-                      valueDisplay={`${fontSize || (activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 120 : 8)}px`}
+                      valueDisplay={`${Math.round(getInterpolatedValue(activeLayer.animationTracks || [], 'options.fontSize', currentTime, fontSize || (activeLayer.type === 'text' || options.renderMode === 'kinetic' ? 120 : 8)))}px`}
                     />
                   </div>
                 </Card>
@@ -1001,27 +1202,27 @@ function PlaygroundContent() {
                 <Card className="space-y-4 card-hover-animation">
                   <h3 className="text-xs font-bold text-text-muted uppercase tracking-widest">Transform</h3>
                   <div className="grid grid-cols-2 gap-4">
-                    <Slider label="Position X" value={activeLayer.transform.x} min={-400} max={400} step={1}
+                    <Slider label="Position X" value={getInterpolatedValue(activeLayer.animationTracks || [], 'transform.x', currentTime, activeLayer.transform.x)} min={-400} max={400} step={1}
                       onChange={(v) => updateLayerTransform(activeLayer.id, { x: v })}
-                      valueDisplay={`${activeLayer.transform.x}px`}
+                      valueDisplay={`${Math.round(getInterpolatedValue(activeLayer.animationTracks || [], 'transform.x', currentTime, activeLayer.transform.x))}px`}
                     />
-                    <Slider label="Position Y" value={activeLayer.transform.y} min={-300} max={300} step={1}
+                    <Slider label="Position Y" value={getInterpolatedValue(activeLayer.animationTracks || [], 'transform.y', currentTime, activeLayer.transform.y)} min={-300} max={300} step={1}
                       onChange={(v) => updateLayerTransform(activeLayer.id, { y: v })}
-                      valueDisplay={`${activeLayer.transform.y}px`}
+                      valueDisplay={`${Math.round(getInterpolatedValue(activeLayer.animationTracks || [], 'transform.y', currentTime, activeLayer.transform.y))}px`}
                     />
                     <div className="col-span-2 flex justify-end">
                       <button onClick={() => updateLayerTransform(activeLayer.id, { x: 0, y: 0 })} className="text-[9px] text-text-muted hover:text-text-primary uppercase tracking-wider">Reset Position</button>
                     </div>
 
-                    <Slider label="Opacity" value={activeLayer.transform.opacity} min={0} max={1} step={0.01}
+                    <Slider label="Opacity" value={getInterpolatedValue(activeLayer.animationTracks || [], 'transform.opacity', currentTime, activeLayer.transform.opacity)} min={0} max={1} step={0.01}
                       onChange={(v) => updateLayerTransform(activeLayer.id, { opacity: v })}
-                      valueDisplay={`${Math.round(activeLayer.transform.opacity * 100)}%`}
+                      valueDisplay={`${Math.round(getInterpolatedValue(activeLayer.animationTracks || [], 'transform.opacity', currentTime, activeLayer.transform.opacity) * 100)}%`}
                     />
                     <div className="flex items-end gap-2">
                       <div className="flex-1">
-                        <Slider label="Scale" value={activeLayer.transform.scale} min={0.1} max={3} step={0.1}
+                        <Slider label="Scale" value={getInterpolatedValue(activeLayer.animationTracks || [], 'transform.scale', currentTime, activeLayer.transform.scale)} min={0.1} max={3} step={0.1}
                           onChange={(v) => updateLayerTransform(activeLayer.id, { scale: v })}
-                          valueDisplay={`${activeLayer.transform.scale.toFixed(1)}x`}
+                          valueDisplay={`${getInterpolatedValue(activeLayer.animationTracks || [], 'transform.scale', currentTime, activeLayer.transform.scale).toFixed(1)}x`}
                         />
                       </div>
                       <div className="flex gap-1 mb-1">
@@ -1029,9 +1230,9 @@ function PlaygroundContent() {
                         <button onClick={() => handleFitToCanvas(true)} title="Cover Canvas" className="px-2 py-1 bg-surface border border-border rounded text-[9px] uppercase hover:bg-surface-hover text-text-muted hover:text-text-primary">Cover</button>
                       </div>
                     </div>
-                    <Slider label="Rotation" value={activeLayer.transform.rotation} min={0} max={360} step={1}
+                    <Slider label="Rotation" value={getInterpolatedValue(activeLayer.animationTracks || [], 'transform.rotation', currentTime, activeLayer.transform.rotation)} min={0} max={360} step={1}
                       onChange={(v) => updateLayerTransform(activeLayer.id, { rotation: v })}
-                      valueDisplay={`${activeLayer.transform.rotation}°`}
+                      valueDisplay={`${Math.round(getInterpolatedValue(activeLayer.animationTracks || [], 'transform.rotation', currentTime, activeLayer.transform.rotation))}°`}
                     />
                     <div>
                       <label className="block text-[10px] text-text-muted mb-2 uppercase tracking-wider font-bold">Blend Mode</label>
@@ -1363,11 +1564,7 @@ function PlaygroundContent() {
             <Card className="relative flex-1 flex flex-col p-0 overflow-hidden bg-black/50 min-h-[500px] card-hover-animation">
               <div className="absolute top-4 left-4 right-4 z-10 flex justify-between items-start pointer-events-none">
                 <div className="flex gap-2 pointer-events-auto">
-                  <div className="flex gap-1.5 bg-black/50 backdrop-blur-md p-1.5 rounded-lg border border-white/10">
-                    <div className="w-3 h-3 rounded-full bg-red-500/80" />
-                    <div className="w-3 h-3 rounded-full bg-yellow-500/80" />
-                    <div className="w-3 h-3 rounded-full bg-green-500/80" />
-                  </div>
+                  {/* Window Controls Removed */}
                 </div>
 
                 <div className="flex gap-3 pointer-events-auto">
@@ -1418,18 +1615,20 @@ function PlaygroundContent() {
                     )}
                   </Button>
 
-                  <div className="flex bg-surface-active/50 rounded-md p-0.5 border border-border/50">
-                    <button onClick={downloadShareCard} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as PNG">PNG</button>
-                    <div className="w-[1px] bg-border/50 my-0.5" />
-                    <button onClick={() => downloadMp4(false)} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as MP4">MP4</button>
-                    <div className="w-[1px] bg-border/50 my-0.5" />
-                    <button onClick={() => exportGif()} disabled={isGifExporting} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors flex items-center gap-1" title="Export Composite as GIF">
-                      GIF {isGifExporting && <span className="text-accent-success animate-pulse">{Math.round(gifProgress)}%</span>}
+                  <div className="flex bg-surface-active/50 rounded-md p-0.5 border border-border/50 items-center">
+                    <button onClick={downloadShareCard} className="px-2 py-1 text-[10px] flex items-center gap-1.5 font-bold text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as PNG"><ImageIcon size={12} /> PNG</button>
+                    <div className="w-[1px] h-3 bg-border/50 mx-0.5" />
+                    <button onClick={() => downloadMp4(false)} className="px-2 py-1 text-[10px] flex items-center gap-1.5 font-bold text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as MP4"><Film size={12} /> MP4</button>
+                    <div className="w-[1px] h-3 bg-border/50 mx-0.5" />
+                    <button onClick={() => exportGif()} disabled={isGifExporting} className="px-2 py-1 text-[10px] flex items-center gap-1.5 font-bold text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Composite as GIF">
+                      <Video size={12} /> GIF {isGifExporting && <span className="text-accent-success animate-pulse ml-1">{Math.round(gifProgress)}%</span>}
                     </button>
-                    <div className="w-[1px] bg-border/50 my-0.5" />
-                    <button onClick={downloadTxt} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Active Layer as TXT">TXT</button>
-                    <div className="w-[1px] bg-border/50 my-0.5" />
-                    <button onClick={downloadHtml} className="px-2 py-0.5 text-[9px] text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Active Layer as HTML">HTML</button>
+                    <div className="w-[1px] h-3 bg-border/50 mx-0.5" />
+                    <button onClick={downloadTxt} className="px-2 py-1 text-[10px] flex items-center gap-1.5 font-bold text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Active Layer as TXT"><FileText size={12} /> TXT</button>
+                    <div className="w-[1px] h-3 bg-border/50 mx-0.5" />
+                    <button onClick={downloadHtml} className="px-2 py-1 text-[10px] flex items-center gap-1.5 font-bold text-text-muted hover:text-text-primary hover:bg-surface-active rounded transition-colors" title="Export Active Layer as HTML"><Code size={12} /> HTML</button>
+                    <div className="w-[1px] h-3 bg-border/50 mx-0.5" />
+                    <button onClick={() => downloadReactComponent(layers, maxDuration, { backgroundColor: activeLayer?.options.bgTheme?.bg || '#000000', fps: 24 })} className="px-2 py-1 text-[10px] flex items-center gap-1.5 font-bold text-accent-primary hover:bg-surface-active rounded transition-colors" title="Export Animated React Component (.tsx) with keyframes baked in"><Code size={12} /> JSX</button>
                   </div>
 
                   {activeLayer && activeLayer.frames.length > 0 && (
@@ -1462,10 +1661,72 @@ function PlaygroundContent() {
                   onUpdateTransformEnd={(id, t) => commitLayerTransform(id, t)}
                   width={800} height={600} scale={1}
                   globalFrameCount={globalFrameCount}
+                  currentTime={currentTime}
+                  maxDuration={maxDuration}
                   audioMetrics={audioMetrics}
                   isRecording={isRecording}
                   globalEffects={globalEffects}
                 />
+              </div>
+
+              {/* Bottom Panel: Timeline / Node Graph Tabs */}
+              <div className="flex flex-col">
+                <div className="flex bg-[#0a0a0a] border-t border-zinc-800">
+                  <button
+                    onClick={() => setBottomPanel('timeline')}
+                    className={clsx(
+                      'px-4 py-2 text-[10px] font-bold uppercase tracking-widest transition-colors border-b-2',
+                      bottomPanel === 'timeline'
+                        ? 'text-accent-primary border-accent-primary bg-zinc-900/50'
+                        : 'text-zinc-500 border-transparent hover:text-zinc-300'
+                    )}
+                  >
+                    Timeline
+                  </button>
+                  <button
+                    onClick={() => setBottomPanel('nodes')}
+                    className={clsx(
+                      'px-4 py-2 text-[10px] font-bold uppercase tracking-widest transition-colors border-b-2 flex items-center gap-1.5',
+                      bottomPanel === 'nodes'
+                        ? 'text-accent-primary border-accent-primary bg-zinc-900/50'
+                        : 'text-zinc-500 border-transparent hover:text-zinc-300'
+                    )}
+                  >
+                    Node Graph
+                    <span className="px-1 py-0.5 rounded text-[7px] bg-accent-primary/20 text-accent-primary font-bold">NEW</span>
+                  </button>
+                </div>
+
+                {bottomPanel === 'timeline' ? (
+                  <Timeline
+                    layers={layers}
+                    activeLayerId={activeLayerId}
+                    currentTime={currentTime}
+                    maxDuration={maxDuration}
+                    isPlaying={isPlaying}
+                    onSeek={(time) => {
+                      setCurrentTime(time);
+                    }}
+                    onAddKeyframe={addKeyframe}
+                    onRemoveKeyframe={removeKeyframe}
+                    onUpdateKeyframe={updateKeyframe}
+                  />
+                ) : (
+                  <div className="h-72">
+                    <NodeEditor
+                      nodes={nodeGraph.graph.nodes}
+                      connections={nodeGraph.graph.connections}
+                      onAddNode={nodeGraph.addNode}
+                      onRemoveNode={nodeGraph.removeNode}
+                      onMoveNode={nodeGraph.moveNode}
+                      onUpdateNodeConfig={nodeGraph.updateNodeConfig}
+                      onAddConnection={nodeGraph.addConnection}
+                      onRemoveConnection={nodeGraph.removeConnection}
+                      onClearGraph={nodeGraph.clearGraph}
+                      evaluatedValues={nodeEvalValues}
+                    />
+                  </div>
+                )}
               </div>
 
             </Card>

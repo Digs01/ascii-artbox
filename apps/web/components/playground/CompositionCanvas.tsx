@@ -2,6 +2,10 @@ import { Layer } from '../../types/layer';
 import { useCallback, useRef, useState, useEffect } from 'react';
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { useFluidDynamics } from '../../hooks/useFluidDynamics';
+import { WebGLKineticRenderer } from './WebGLKineticRenderer';
+import { ModelRenderer } from './ModelRenderer';
+
+import { getInterpolatedValue } from '../../utils/interpolation';
 
 interface CompositionCanvasProps {
     layers: Layer[];
@@ -13,6 +17,8 @@ interface CompositionCanvasProps {
     height: number; // Container height
     scale: number; // Zoom scale
     globalFrameCount: number;
+    currentTime?: number;
+    maxDuration?: number;
     audioMetrics?: { bass: number; mid: number; treble: number; volume: number };
     isRecording?: boolean;
     globalEffects?: {
@@ -45,6 +51,8 @@ export function CompositionCanvas({
     height,
     scale = 1,
     globalFrameCount = 0,
+    currentTime = 0,
+    maxDuration = 5,
     audioMetrics,
     isRecording = false,
     globalEffects
@@ -186,11 +194,31 @@ export function CompositionCanvas({
                     if (!layer.visible) return null;
 
                     const activeFrame = layer.frames.length > 0
-                        ? layer.frames[globalFrameCount % layer.frames.length]
+                        ? layer.frames[Math.floor(globalFrameCount) % layer.frames.length]
                         : '';
 
+                    // --- KEYFRAME INTERPOLATION ---
+                    // Merge active layer transforms and options with interpolated keyframe values
+                    const t = layer.transform;
+                    const o = layer.options;
+                    const tracks = layer.animationTracks || [];
+
+                    let transform = {
+                        ...t,
+                        x: getInterpolatedValue(tracks, 'transform.x', currentTime, t.x),
+                        y: getInterpolatedValue(tracks, 'transform.y', currentTime, t.y),
+                        scale: getInterpolatedValue(tracks, 'transform.scale', currentTime, t.scale),
+                        rotation: getInterpolatedValue(tracks, 'transform.rotation', currentTime, t.rotation),
+                        opacity: getInterpolatedValue(tracks, 'transform.opacity', currentTime, t.opacity),
+                    };
+
+                    let options = {
+                        ...o,
+                        fontSize: getInterpolatedValue(tracks, 'options.fontSize', currentTime, o.fontSize),
+                        color: getInterpolatedValue(tracks, 'options.color', currentTime, o.color),
+                    };
+
                     // --- AUDIO REACTIVITY ---
-                    let transform = { ...layer.transform };
                     let filterStyle = '';
                     let svgFilter = null;
 
@@ -243,14 +271,28 @@ export function CompositionCanvas({
                         filterStyle += ' drop-shadow(0px 0px 8px currentColor) drop-shadow(0px 0px 16px currentColor)';
                     }
 
+                    // --- KINETIC GRID DIMENSIONS ---
+                    let kineticSize = { w: 0, h: 0 };
+                    if (options.renderMode === 'kinetic' && activeFrame) {
+                        const fontSize = options.fontSize || 12;
+                        const lines = activeFrame.split('\n');
+                        const maxChars = lines[0] ? lines[0].split('|').filter(Boolean).length : 0;
+                        kineticSize = {
+                            w: maxChars * (fontSize * 0.6),
+                            h: lines.length * fontSize
+                        };
+                    }
+
                     return (
                         <div key={layer.id} className="absolute w-full h-full pointer-events-none">
                             {svgFilter}
                             <div
-                                className={`absolute origin-center transition-transform select-none ${activeLayerId === layer.id ? 'z-10 pointer-events-auto' : 'pointer-events-auto'} ${activeLayerId === layer.id && activeFrame ? 'outline outline-1 outline-accent-primary' : ''} ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
+                                className={`absolute origin-center select-none ${activeLayerId === layer.id ? 'z-10 pointer-events-auto' : 'pointer-events-auto'} ${activeLayerId === layer.id && activeFrame ? 'outline outline-1 outline-accent-primary' : ''} ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
                                 style={{
                                     left: '50%',
                                     top: '50%',
+                                    width: kineticSize.w > 0 ? `${kineticSize.w}px` : undefined,
+                                    height: kineticSize.h > 0 ? `${kineticSize.h}px` : undefined,
                                     // Use transform.z or index spacing if 3D is on
                                     transform: `translate(-50%, -50%) translate3d(${transform.x}px, ${transform.y}px, ${globalEffects?.enable3D ? index * 40 : 0}px) rotate(${transform.rotation}deg) scale(${transform.scale}) scaleX(${transform.flipX ? -1 : 1}) scaleY(${transform.flipY ? -1 : 1})`,
                                     opacity: transform.opacity,
@@ -265,30 +307,40 @@ export function CompositionCanvas({
                                     <div
                                         className="whitespace-pre-wrap font-black leading-none text-center"
                                         style={{
-                                            fontSize: `${layer.options.fontSize || 120}px`,
+                                            fontSize: `${options.fontSize || 120}px`,
                                             lineHeight: 1,
-                                            color: layer.options.color,
+                                            color: options.color,
                                             fontFamily: 'Inter, system-ui, sans-serif' // Standard bold sans for masking
                                         }}
                                     >
-                                        {layer.options.overlayText || 'TEXT'}
+                                        {options.overlayText || 'TEXT'}
                                     </div>
-                                ) : layer.options.renderMode === 'kinetic' ? (
-                                    <KineticCanvasRenderer
+                                ) : layer.type === 'model' ? (
+                                    <ModelRenderer layer={layer} />
+                                ) : options.renderMode === 'kinetic' ? (
+                                    <WebGLKineticRenderer
                                         frame={activeFrame}
-                                        layer={layer}
+                                        layer={{ ...layer, options, transform }}
+                                        audioMetrics={audioMetrics}
+                                        fluid={fluid}
+                                    />
+                                ) : options.colorMode || activeFrame.includes('<span') ? (
+                                    <ColorCanvasRenderer
+                                        frame={activeFrame}
+                                        layer={{ ...layer, options, transform }}
                                         audioMetrics={audioMetrics}
                                     />
                                 ) : (
                                     <pre
                                         className="whitespace-pre font-mono leading-none"
                                         style={{
-                                            fontSize: `${layer.options.fontSize}px`,
-                                            lineHeight: `${layer.options.fontSize}px`,
-                                            color: layer.options.colorMode ? undefined : layer.options.color
+                                            fontSize: `${options.fontSize}px`,
+                                            lineHeight: `${options.fontSize}px`,
+                                            color: options.color
                                         }}
-                                        dangerouslySetInnerHTML={{ __html: activeFrame }}
-                                    />
+                                    >
+                                        {activeFrame}
+                                    </pre>
                                 )}
                             </div>
                         </div>
@@ -298,31 +350,20 @@ export function CompositionCanvas({
         </div>
     );
 }
-// Dedicated inline Canvas renderer for Kinetic mode
-const KineticCanvasRenderer = ({ frame, layer, audioMetrics, fluid }: { frame: string, layer: Layer, audioMetrics?: any, fluid?: any }) => {
-    const canvasRef = useRef<HTMLCanvasElement>(null);
-    const animationRef = useRef<number>();
 
-    // We store the latest parsed lines and size configs so the rAF loop can access them without React deps constantly firing
-    const stateRef = useRef({
-        lines: [] as string[],
-        fontSize: 12,
-        gridWidth: 800,
-        baseOpacity: 1
-    });
+// Dedicated inline Canvas renderer for Color HTML mode to vastly improve performance
+const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, layer: Layer, audioMetrics?: any }) => {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
 
     useEffect(() => {
-        if (!frame) return;
-        const fontSize = layer.options.fontSize || 12;
-        const lines = frame.split('\n');
-        let gridWidth = 0;
-        if (lines[0]) {
-            // Rough estimate to build canvas size
-            const firstLineChars = lines[0].split('|').filter(Boolean).length;
-            gridWidth = firstLineChars * fontSize * 0.6; // approx monospace width
-        }
+        if (!canvasRef.current || !frame) return;
+        const canvas = canvasRef.current;
+        const ctx = canvas.getContext('2d', { alpha: true });
+        if (!ctx) return;
 
+        const fontSize = layer.options.fontSize || 12;
         let baseOpacity = layer.transform.opacity;
+
         if (layer.transform.audioReact?.enabled && audioMetrics) {
             const { source, target, strength, invert } = layer.transform.audioReact;
             const val = audioMetrics[source] || 0;
@@ -331,98 +372,94 @@ const KineticCanvasRenderer = ({ frame, layer, audioMetrics, fluid }: { frame: s
             if (target === 'opacity') baseOpacity = Math.min(1, Math.max(0.1, baseOpacity * (1 + (mod - 0.5))));
         }
 
-        stateRef.current = {
-            lines,
-            fontSize,
-            gridWidth,
-            baseOpacity
-        };
-    }, [frame, layer, audioMetrics]);
+        const lines = frame.split('\n');
+        const tokens: { char: string, color: string, x: number, lineY: number }[] = [];
+        let maxChars = 0;
 
-    useEffect(() => {
-        if (!canvasRef.current || !stateRef.current.lines.length) return;
-        const canvas = canvasRef.current;
-        const ctx = canvas.getContext('2d');
-        if (!ctx) return;
+        lines.forEach((line, i) => {
+            let currentX = 0;
+            const lineY = i * fontSize;
+            let j = 0;
 
-        // Establish persistent canvas sizing based on the last parsed frame
-        const { lines, fontSize, gridWidth } = stateRef.current;
-        const totalHeight = lines.length * fontSize;
+            while (j < line.length) {
+                if (line.substring(j, j + 5) === '<span') {
+                    const endTagIndex = line.indexOf('>', j);
+                    if (endTagIndex !== -1) {
+                        const spanTag = line.substring(j, endTagIndex + 1);
+                        const colorMatch = spanTag.match(/style="color:\s*([^"]+)"/);
+                        const parsedColor = colorMatch ? colorMatch[1] : layer.options.color || 'white';
+
+                        const closeTagIndex = line.indexOf('</span>', endTagIndex);
+                        if (closeTagIndex !== -1) {
+                            const rawContent = line.substring(endTagIndex + 1, closeTagIndex);
+                            const char = rawContent === '&nbsp;' ? ' ' : rawContent
+                                .replace(/&lt;/g, '<')
+                                .replace(/&gt;/g, '>')
+                                .replace(/&amp;/g, '&')
+                                .replace(/&apos;/g, "'")
+                                .replace(/&quot;/g, '"');
+
+                            tokens.push({ char, color: parsedColor, x: currentX, lineY });
+                            currentX++;
+                            j = closeTagIndex + 7;
+                        } else {
+                            tokens.push({ char: line[j], color: layer.options.color || 'white', x: currentX, lineY });
+                            currentX++;
+                            j++;
+                        }
+                    } else {
+                        tokens.push({ char: line[j], color: layer.options.color || 'white', x: currentX, lineY });
+                        currentX++;
+                        j++;
+                    }
+                } else {
+                    const nextSpan = line.indexOf('<span', j);
+                    const endIdx = nextSpan !== -1 ? nextSpan : line.length;
+                    const chunk = line.substring(j, endIdx);
+                    // unescape
+                    const unescapedChunk = chunk.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+                    for (let c = 0; c < unescapedChunk.length; c++) {
+                        tokens.push({ char: unescapedChunk[c], color: layer.options.color || 'white', x: currentX, lineY });
+                        currentX++;
+                    }
+                    j = endIdx;
+                }
+            }
+            if (currentX > maxChars) maxChars = currentX;
+        });
+
+        // Use precise Monospace font rendering
+        ctx.font = `${fontSize}px monospace`;
+        const charAdvance = Math.ceil(ctx.measureText('M').width) || (fontSize * 0.6);
+
+        const gridWidth = Math.ceil(maxChars * charAdvance);
+        const totalHeight = Math.ceil(lines.length * fontSize);
+
         if (canvas.width !== gridWidth || canvas.height !== totalHeight) {
             canvas.width = gridWidth || 800;
             canvas.height = totalHeight || 600;
+            // re-apply font setting since context resets on resize
+            ctx.font = `${fontSize}px monospace`;
         }
 
-        // --- Continuous Render Loop for Fluid Dynamics ---
-        const renderLoop = () => {
-            const { lines, fontSize, baseOpacity } = stateRef.current;
-            ctx.clearRect(0, 0, canvas.width, canvas.height);
-            ctx.font = `${fontSize}px monospace`;
-            ctx.textBaseline = 'top';
+        ctx.clearRect(0, 0, canvas.width, canvas.height);
+        ctx.textBaseline = 'top';
+        ctx.globalAlpha = baseOpacity;
 
-            const startX = 0;
-            const startY = 0;
-
-            lines.forEach((line, i) => {
-                const charDataBlocks = line.split('|').filter(Boolean);
-                const lineY = startY + (i * fontSize);
-                let currentX = startX;
-                const charAdvance = ctx.measureText('A').width;
-
-                for (let c = 0; c < charDataBlocks.length; c++) {
-                    const block = charDataBlocks[c];
-                    const parts = block.split(',');
-                    if (parts.length === 7) {
-                        const char = parts[0] === '&nbsp;' ? ' ' : parts[0];
-                        const letterScale = parseFloat(parts[2]);
-                        const op = parseFloat(parts[3]);
-                        const r = parseInt(parts[4]);
-                        const g = parseInt(parts[5]);
-                        const b = parseInt(parts[6]);
-
-                        if (op > 0.05 && char !== ' ') {
-                            // Fluid Displacement Lookup
-                            let dx = 0;
-                            let dy = 0;
-                            if (fluid && fluid.getDisplacement) {
-                                // The fluid grid uses screen coordinates, so we lookup where this canvas character is roughly on screen.
-                                // For simplicity we just use the local canvas relative coordinates.
-                                const disp = fluid.getDisplacement(currentX, lineY);
-                                dx = disp.x;
-                                dy = disp.y;
-                            }
-
-                            ctx.save();
-                            ctx.translate((currentX + dx) + charAdvance / 2, (lineY + dy) + fontSize / 2);
-                            ctx.scale(letterScale, letterScale);
-                            ctx.translate(-((currentX + dx) + charAdvance / 2), -((lineY + dy) + fontSize / 2));
-
-                            ctx.globalAlpha = baseOpacity * op;
-                            ctx.fillStyle = `rgb(${r},${g},${b})`;
-                            ctx.fillText(char, currentX + dx, lineY + dy);
-                            ctx.restore();
-                        }
-                    }
-                    currentX += charAdvance;
+        // Draw batched
+        let lastColor = null;
+        for (let i = 0; i < tokens.length; i++) {
+            const t = tokens[i];
+            if (t.char !== ' ') {
+                if (t.color !== lastColor) {
+                    ctx.fillStyle = t.color;
+                    lastColor = t.color;
                 }
-            });
+                ctx.fillText(t.char, t.x * charAdvance, t.lineY);
+            }
+        }
+    }, [frame, layer, audioMetrics]);
 
-            animationRef.current = requestAnimationFrame(renderLoop);
-        };
-
-        animationRef.current = requestAnimationFrame(renderLoop);
-
-        return () => {
-            if (animationRef.current) cancelAnimationFrame(animationRef.current);
-        };
-    }, [fluid, frame]);
-
-    return (
-        <canvas
-            ref={canvasRef}
-            style={{
-                display: 'block'
-            }}
-        />
-    );
+    return <canvas ref={canvasRef} style={{ display: 'block' }} />;
 };
+

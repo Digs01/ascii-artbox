@@ -1,5 +1,5 @@
 import { useState, useCallback, useMemo } from 'react';
-import { Layer, LayerOptions, LayerTransform } from '../types/layer';
+import { Layer, LayerOptions, LayerTransform, Keyframe, KeyframeTrack } from '../types/layer';
 import { useHistory } from './useHistory';
 
 const generateId = () => Math.random().toString(36).substr(2, 9);
@@ -66,13 +66,14 @@ export function useLayers() {
             name: file ? file.name : `Layer ${layers.length + 1}`,
             visible: true,
             locked: false,
-            type: file ? (file.type.startsWith('video/') ? 'video' : 'image') : 'text',
+            type: file ? (file.type.startsWith('video/') ? 'video' : 'image') : 'image',
             file: file,
             previewUrl: file ? URL.createObjectURL(file) : null,
             frames: [],
             fps: 12,
             options: { ...DEFAULT_OPTIONS },
             transform: { ...DEFAULT_TRANSFORM },
+            animationTracks: []
         };
 
         setLayers(prev => [newLayer, ...prev]); // Add to top
@@ -154,6 +155,74 @@ export function useLayers() {
         ));
     }, [setLayers]);
 
+    // --- Keyframing Methods ---
+    const addKeyframe = useCallback((layerId: string, property: string, time: number, value: any, easing: Keyframe['easing'] = 'linear') => {
+        setLayers(prev => prev.map(l => {
+            if (l.id !== layerId) return l;
+
+            const tracks = l.animationTracks || [];
+            let trackIndex = tracks.findIndex(t => t.property === property);
+
+            // If track doesn't exist, create it
+            let newTracks = [...tracks];
+            if (trackIndex === -1) {
+                newTracks.push({ property, keyframes: [] });
+                trackIndex = newTracks.length - 1;
+            }
+
+            // Create new track object with added keyframe
+            const targetTrack = newTracks[trackIndex];
+
+            // Check if keyframe exists at this exact time
+            const existingIndex = targetTrack.keyframes.findIndex(k => Math.abs(k.time - time) < 0.001);
+            let updatedKeyframes = [...targetTrack.keyframes];
+
+            if (existingIndex !== -1) {
+                // Update existing
+                updatedKeyframes[existingIndex] = { ...updatedKeyframes[existingIndex], value, easing };
+            } else {
+                // Add new and sort by time
+                updatedKeyframes.push({ id: generateId(), time, value, easing });
+                updatedKeyframes.sort((a, b) => a.time - b.time);
+            }
+
+            newTracks[trackIndex] = { ...targetTrack, keyframes: updatedKeyframes };
+            return { ...l, animationTracks: newTracks };
+        }));
+    }, [setLayers]);
+
+    const removeKeyframe = useCallback((layerId: string, property: string, keyframeId: string) => {
+        setLayers(prev => prev.map(l => {
+            if (l.id !== layerId || !l.animationTracks) return l;
+
+            const newTracks = l.animationTracks.map(t => {
+                if (t.property !== property) return t;
+                return { ...t, keyframes: t.keyframes.filter(k => k.id !== keyframeId) };
+            });
+
+            return { ...l, animationTracks: newTracks };
+        }));
+    }, [setLayers]);
+
+    const updateKeyframe = useCallback((layerId: string, property: string, keyframeId: string, updates: Partial<Keyframe>) => {
+        setLayers(prev => prev.map(l => {
+            if (l.id !== layerId || !l.animationTracks) return l;
+
+            const newTracks = l.animationTracks.map(t => {
+                if (t.property !== property) return t;
+
+                let newKeyframes = t.keyframes.map(k => k.id === keyframeId ? { ...k, ...updates } : k);
+                // If time was updated, re-sort
+                if (updates.time !== undefined) {
+                    newKeyframes.sort((a, b) => a.time - b.time);
+                }
+                return { ...t, keyframes: newKeyframes };
+            });
+
+            return { ...l, animationTracks: newTracks };
+        }));
+    }, [setLayers]);
+
     return {
         layers,
         activeLayer,
@@ -169,6 +238,9 @@ export function useLayers() {
         duplicateLayer,
         reorderLayers,
         setLayerAscii,
+        addKeyframe,
+        removeKeyframe,
+        updateKeyframe,
         undo, redo, canUndo, canRedo // New
     };
 }
