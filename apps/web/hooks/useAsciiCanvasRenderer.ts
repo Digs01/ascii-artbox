@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { Layer } from '../types/layer';
 
-const HTML_COLOR_REGEX = /<span style="color:(rgb\(\d+,\d+,\d+\)|#[0-9a-fA-F]+)">([\s\S]*?)<\/span>/g;
 const NEWLINE_REGEX = /\n/g;
 
 export interface UseAsciiCanvasRendererProps {
@@ -9,6 +8,7 @@ export interface UseAsciiCanvasRendererProps {
     width: number;
     height: number;
     globalFrameCount: number;
+    currentTime?: number;
     audioMetrics?: { bass: number; mid: number; treble: number; volume: number };
     backgroundColor?: string;
 }
@@ -18,6 +18,7 @@ export function useAsciiCanvasRenderer({
     width,
     height,
     globalFrameCount,
+    currentTime = 0,
     audioMetrics,
     backgroundColor = '#111111'
 }: UseAsciiCanvasRendererProps) {
@@ -182,53 +183,71 @@ export function useAsciiCanvasRenderer({
 
                 lines.forEach((line, i) => {
                     const lineY = startY + (i * lineHeight);
-                    let cursorX = 0;
 
-                    // Temporary simple parser for line:
-                    // Matches <span style="color:...">text</span> OR plain text
-                    const parts = [];
-                    let lastIndex = 0;
+                    // Parse line into tokens
+                    const tokens: { char: string, color: string }[] = [];
+                    let j = 0;
 
-                    // Reset regex state
-                    const regex = new RegExp(HTML_COLOR_REGEX);
-                    let match;
+                    while (j < line.length) {
+                        if (line.substring(j, j + 5) === '<span') {
+                            const endTagIndex = line.indexOf('>', j);
+                            if (endTagIndex !== -1) {
+                                const spanTag = line.substring(j, endTagIndex + 1);
+                                const colorMatch = spanTag.match(/style="color:\s*([^"]+)"/);
+                                const parsedColor = colorMatch ? colorMatch[1] : layer.options.color || 'white';
 
-                    // This regex logic is fragile if tags are nested or malformed, but our converter is consistent.
-                    // Also need to handle plain text between tags.
+                                const closeTagIndex = line.indexOf('</span>', endTagIndex);
+                                if (closeTagIndex !== -1) {
+                                    const rawContent = line.substring(endTagIndex + 1, closeTagIndex);
+                                    const char = rawContent === '&nbsp;' ? ' ' : rawContent
+                                        .replace(/&lt;/g, '<')
+                                        .replace(/&gt;/g, '>')
+                                        .replace(/&amp;/g, '&')
+                                        .replace(/&apos;/g, "'")
+                                        .replace(/&quot;/g, '"');
 
-                    // Alternative: strip tags for width calculation, then accurate draw?
-                    // Actually, we need to center the LINE horizontally.
-                    // First, measure total width of the line (text only).
-                    const tempDiv = document.createElement('div');
-                    tempDiv.innerHTML = line;
-                    const textContent = tempDiv.textContent || '';
-                    const totalWidth = ctx.measureText(textContent).width;
-
-                    cursorX = -totalWidth / 2;
-
-                    // Now draw parts
-                    // We can iterate the string.
-                    // Check for '<span' vs text.
-
-                    // Robust primitive parser:
-                    let currentX = cursorX;
-                    // Hacky regex loop on the line
-                    let subMatch;
-                    const lineRegex = /<span style="color:(.*?)">(.*?)<\/span>|([^<]+)/g;
-
-                    while ((subMatch = lineRegex.exec(line)) !== null) {
-                        if (subMatch[1]) {
-                            // Color Span
-                            // subMatch[1] = color, subMatch[2] = content
-                            ctx.fillStyle = subMatch[1];
-                            ctx.fillText(subMatch[2], currentX, lineY);
-                            currentX += ctx.measureText(subMatch[2]).width;
-                        } else if (subMatch[3]) {
-                            // Plain text
-                            ctx.fillStyle = layer.options.color || '#fff';
-                            ctx.fillText(subMatch[3], currentX, lineY);
-                            currentX += ctx.measureText(subMatch[3]).width;
+                                    tokens.push({ char, color: parsedColor });
+                                    j = closeTagIndex + 7;
+                                } else {
+                                    tokens.push({ char: line[j], color: layer.options.color || 'white' });
+                                    j++;
+                                }
+                            } else {
+                                tokens.push({ char: line[j], color: layer.options.color || 'white' });
+                                j++;
+                            }
+                        } else {
+                            const nextSpan = line.indexOf('<span', j);
+                            const endIdx = nextSpan !== -1 ? nextSpan : line.length;
+                            const chunk = line.substring(j, endIdx);
+                            // unescape
+                            const unescapedChunk = chunk.replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&');
+                            for (let c = 0; c < unescapedChunk.length; c++) {
+                                tokens.push({ char: unescapedChunk[c], color: layer.options.color || 'white' });
+                            }
+                            j = endIdx;
                         }
+                    }
+
+                    // Calculate total width to center it
+                    let totalWidth = 0;
+                    for (const t of tokens) {
+                        totalWidth += ctx.measureText(t.char).width;
+                    }
+
+                    let currentX = -totalWidth / 2;
+                    let lastColor = null;
+
+                    // Draw tokens
+                    for (const t of tokens) {
+                        if (t.char !== ' ') {
+                            if (t.color !== lastColor) {
+                                ctx.fillStyle = t.color;
+                                lastColor = t.color;
+                            }
+                            ctx.fillText(t.char, currentX, lineY);
+                        }
+                        currentX += ctx.measureText(t.char).width;
                     }
                 });
 

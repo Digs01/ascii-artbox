@@ -44,16 +44,58 @@ async function renderAsciiFrameToBuffer(text, options = {}) {
             default: return c;
         }
     });
-    // Build SVG content
-    // Use `white-space: pre` style to preserve spaces
-    // But SVG text doesn't support white-space: pre naturally without nested tspans usually?
-    // Actually, preserving spaces in tspan is tricky.
-    // Better to use `xml:space="preserve"` on text element.
+    const parseHtmlSpansToTspans = (line) => {
+        if (!line.includes('<span'))
+            return escapeXml(line) || ' ';
+        let svgLine = '';
+        let i = 0;
+        while (i < line.length) {
+            if (line.substring(i, i + 5) === '<span') {
+                const endTagIndex = line.indexOf('>', i);
+                if (endTagIndex !== -1) {
+                    const spanTag = line.substring(i, endTagIndex + 1);
+                    const colorMatch = spanTag.match(/style="color:\s*([^"]+)"/);
+                    const parsedColor = colorMatch ? colorMatch[1] : '';
+                    const closeTagIndex = line.indexOf('</span>', endTagIndex);
+                    if (closeTagIndex !== -1) {
+                        const content = line.substring(endTagIndex + 1, closeTagIndex);
+                        if (parsedColor) {
+                            svgLine += `<tspan fill="${parsedColor}">${escapeXml(content)}</tspan>`;
+                        }
+                        else {
+                            svgLine += `<tspan>${escapeXml(content)}</tspan>`;
+                        }
+                        i = closeTagIndex + 7;
+                    }
+                    else {
+                        svgLine += escapeXml(line[i]);
+                        i++;
+                    }
+                }
+                else {
+                    svgLine += escapeXml(line[i]);
+                    i++;
+                }
+            }
+            else {
+                const nextSpan = line.indexOf('<span', i);
+                if (nextSpan !== -1) {
+                    svgLine += escapeXml(line.substring(i, nextSpan));
+                    i = nextSpan;
+                }
+                else {
+                    svgLine += escapeXml(line.substring(i));
+                    break;
+                }
+            }
+        }
+        return svgLine || ' ';
+    };
     // We position each line manually to ensure correct line height
     const tspans = lines.map((line, i) => {
         // We use dy on sequential tspans or absolute y.
         // Let's use absolute y for predictability (or dy with x=0)
-        return `<tspan x="${fontSize}" dy="${lineHeight}px">${escapeXml(line) || ' '}</tspan>`;
+        return `<tspan x="${fontSize}" dy="${lineHeight}px">${parseHtmlSpansToTspans(line)}</tspan>`;
     }).join('');
     const svg = `
     <svg width="${svgWidth}" height="${svgHeight}" xmlns="http://www.w3.org/2000/svg">
@@ -109,6 +151,10 @@ async function createAsciiVideo(frames, fps, options = {}) {
                 .videoCodec('libx264')
                 .outputOptions([
                 '-pix_fmt yuv420p', // Essential for wide compatibility
+                '-color_primaries bt709',
+                '-color_trc bt709',
+                '-colorspace bt709',
+                '-color_range pc', // Force full 0-255 range instead of 16-235 TV range
                 '-preset fast', // Speed up encoding
                 '-crf 22' // Reasonable quality
             ])
@@ -291,6 +337,10 @@ async function createCompositeAsciiVideo(layers, options) {
                 .videoCodec('libx264')
                 .outputOptions([
                 '-pix_fmt yuv420p',
+                '-color_primaries bt709',
+                '-color_trc bt709',
+                '-colorspace bt709',
+                '-color_range pc',
                 '-preset fast',
                 '-crf 22'
             ])

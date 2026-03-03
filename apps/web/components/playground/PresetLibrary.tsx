@@ -2,7 +2,7 @@ import { motion, AnimatePresence } from 'framer-motion';
 import { Button } from '../ui/Button';
 import { PRESETS, Preset } from '../../config/presets';
 import { clsx } from 'clsx';
-import { X } from 'lucide-react';
+import { X, Sparkles, Palette, Zap, Cpu, Layers } from 'lucide-react';
 
 interface PresetLibraryProps {
     isOpen: boolean;
@@ -12,6 +12,17 @@ interface PresetLibraryProps {
 
 export function PresetLibrary({ isOpen, onClose, onSelectPreset }: PresetLibraryProps) {
     if (!isOpen) return null;
+
+    // Helper to get an icon based on category
+    const getCategoryIcon = (category: string) => {
+        switch (category.toLowerCase()) {
+            case 'color': return <Palette className="w-8 h-8 opacity-50 text-white group-hover:opacity-100 group-hover:scale-110 transition-all duration-300" />;
+            case 'effects': return <Sparkles className="w-8 h-8 opacity-50 text-white group-hover:opacity-100 group-hover:scale-110 transition-all duration-300" />;
+            case 'engine': return <Cpu className="w-8 h-8 opacity-50 text-white group-hover:opacity-100 group-hover:scale-110 transition-all duration-300" />;
+            case 'kinetic': return <Zap className="w-8 h-8 opacity-50 text-white group-hover:opacity-100 group-hover:scale-110 transition-all duration-300" />;
+            default: return <Layers className="w-8 h-8 opacity-50 text-white group-hover:opacity-100 group-hover:scale-110 transition-all duration-300" />;
+        }
+    };
 
     return (
         <AnimatePresence>
@@ -50,18 +61,23 @@ export function PresetLibrary({ isOpen, onClose, onSelectPreset }: PresetLibrary
                                     }}
                                     className="group relative flex flex-col items-start text-left bg-black border border-border rounded-lg overflow-hidden hover:border-accent-primary transition-all hover:shadow-[0_0_20px_rgba(34,197,94,0.1)]"
                                 >
-                                    {/* Thumbnail Placeholder */}
+                                    {/* Thumbnail Placeholder with Icon */}
                                     <div className={clsx(
-                                        "w-full aspect-video flex items-center justify-center text-4xl font-black text-white/20 uppercase tracking-tighter opacity-80 group-hover:opacity-100 transition-opacity",
-                                        preset.thumbnail || 'bg-zinc-800'
+                                        "w-full aspect-video flex items-center justify-center bg-zinc-900 border-b border-border/50 overflow-hidden relative"
                                     )}>
-                                        {preset.name.substring(0, 2)}
+                                        {/* Subtle background pattern for visual interest */}
+                                        <div className="absolute inset-0 opacity-10" style={{ backgroundImage: 'radial-gradient(circle at 2px 2px, white 1px, transparent 0)', backgroundSize: '16px 16px' }} />
+                                        {getCategoryIcon(preset.category)}
+                                        {/* Color hint bar if it's a color preset */}
+                                        {preset.options?.color && !preset.options?.colorMode && (
+                                            <div className="absolute bottom-0 left-0 right-0 h-1" style={{ backgroundColor: preset.options.color }} />
+                                        )}
                                     </div>
 
                                     <div className="p-4 w-full bg-surface group-hover:bg-surface-hover transition-colors">
-                                        <div className="flex justify-between items-start mb-1">
-                                            <h3 className="font-bold text-sm text-text-primary group-hover:text-accent-primary transition-colors">{preset.name}</h3>
-                                            <span className="text-[9px] bg-white/10 px-1.5 py-0.5 rounded text-text-muted uppercase tracking-wider">{preset.category}</span>
+                                        <div className="flex justify-between items-start mb-2">
+                                            <h3 className="font-bold text-sm text-text-primary group-hover:text-accent-primary transition-colors truncate pr-2">{preset.name}</h3>
+                                            <span className="text-[9px] bg-white/10 px-1.5 py-0.5 rounded text-text-muted uppercase tracking-wider shrink-0">{preset.category}</span>
                                         </div>
                                         <p className="text-[11px] text-text-muted line-clamp-2 leading-relaxed">{preset.description}</p>
                                     </div>

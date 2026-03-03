@@ -57,70 +57,78 @@ export function LayerManager({
                             transition={{ duration: 0.2 }}
                             onClick={() => onSelectLayer(layer.id)}
                             className={clsx(
-                                "flex items-center gap-2 p-2 rounded cursor-pointer border select-none group relative overflow-hidden",
+                                "flex items-center gap-3 p-3 rounded cursor-pointer border-2 select-none group relative overflow-hidden transition-all",
                                 activeLayerId === layer.id
-                                    ? 'bg-surface-active border-border-hover shadow-sm'
-                                    : 'bg-surface/50 border-transparent hover:bg-surface-hover/50 hover:border-border'
+                                    ? 'bg-surface-active border-accent-success/50 shadow-md'
+                                    : 'bg-surface/50 border-transparent hover:bg-surface-hover/80 hover:border-border'
                             )}
-                            whileDrag={{ scale: 1.02, boxShadow: "0 5px 15px rgba(0,0,0,0.1)", zIndex: 50 }}
+                            whileDrag={{ scale: 1.02, boxShadow: "0 5px 15px rgba(0,0,0,0.15)", zIndex: 50 }}
                         >
-                            <div className="cursor-grab active:cursor-grabbing text-text-muted hover:text-text-secondary px-1 py-2 -ml-1">
-                                <GripVertical size={12} />
+                            <div className="cursor-grab active:cursor-grabbing text-text-muted hover:text-text-secondary py-2 -ml-2">
+                                <GripVertical size={14} />
                             </div>
 
-                            <div className="w-8 h-8 bg-black rounded border border-border flex items-center justify-center overflow-hidden shrink-0">
+                            <div className="w-10 h-10 bg-black rounded border border-border flex items-center justify-center overflow-hidden shrink-0 shadow-inner">
                                 {layer.previewUrl ? (
                                     layer.type === 'video' ? (
                                         <video src={layer.previewUrl} className="w-full h-full object-cover" />
+                                    ) : layer.type === 'model' ? (
+                                        <div className="w-full h-full flex items-center justify-center bg-surface text-text-muted">
+                                            <span className="text-[10px] font-bold">3D</span>
+                                        </div>
                                     ) : (
                                         <img src={layer.previewUrl} alt="preview" className="w-full h-full object-cover" />
                                     )
                                 ) : (
-                                    <span className="text-[8px] text-text-muted">TXT</span>
+                                    <span className="text-[9px] font-bold text-text-muted">TXT</span>
                                 )}
                             </div>
 
                             <div className="flex-1 min-w-0 flex flex-col justify-center">
-                                <div className="text-[11px] font-medium truncate text-text-primary leading-tight">{layer.name}</div>
-                                <div className="text-[9px] text-text-muted uppercase leading-tight mt-0.5">{layer.type}</div>
+                                <div className="text-xs font-bold truncate text-text-primary leading-tight">{layer.name}</div>
+                                <div className="text-[10px] text-text-muted uppercase font-bold tracking-wider leading-tight mt-1">{layer.type}</div>
                             </div>
 
                             {/* Actions visible on hover or active */}
                             <div className={clsx(
-                                "flex gap-1 transition-opacity bg-gradient-to-l from-surface-active pl-2",
+                                "flex gap-1 transition-opacity",
                                 activeLayerId === layer.id ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
                             )}>
                                 <motion.button
-                                    whileHover={{ scale: 1.1 }}
+                                    whileHover={{ scale: 1.15 }}
                                     whileTap={{ scale: 0.9 }}
                                     onClick={(e) => { e.stopPropagation(); onToggleLock(layer.id); }}
-                                    className="p-1 text-text-muted hover:text-text-primary"
+                                    className="p-1.5 rounded-md bg-surface border border-transparent hover:border-border text-text-muted hover:text-text-primary transition-colors"
+                                    title={layer.locked ? "Unlock Layer" : "Lock Layer"}
                                 >
-                                    {layer.locked ? <Lock size={12} /> : <Unlock size={12} />}
+                                    {layer.locked ? <Lock size={14} /> : <Unlock size={14} />}
                                 </motion.button>
                                 <motion.button
-                                    whileHover={{ scale: 1.1 }}
+                                    whileHover={{ scale: 1.15 }}
                                     whileTap={{ scale: 0.9 }}
                                     onClick={(e) => { e.stopPropagation(); onToggleVisibility(layer.id); }}
-                                    className="p-1 text-text-muted hover:text-text-primary"
+                                    className="p-1.5 rounded-md bg-surface border border-transparent hover:border-border text-text-muted hover:text-text-primary transition-colors"
+                                    title={layer.visible ? "Hide Layer" : "Show Layer"}
                                 >
-                                    {layer.visible ? <Eye size={12} /> : <EyeOff size={12} />}
+                                    {layer.visible ? <Eye size={14} /> : <EyeOff size={14} />}
                                 </motion.button>
                                 <motion.button
-                                    whileHover={{ scale: 1.1 }}
+                                    whileHover={{ scale: 1.15 }}
                                     whileTap={{ scale: 0.9 }}
                                     onClick={(e) => { e.stopPropagation(); onDuplicateLayer(layer.id); }}
-                                    className="p-1 text-text-muted hover:text-text-primary"
+                                    className="p-1.5 rounded-md bg-surface border border-transparent hover:border-border text-text-muted hover:text-text-primary transition-colors"
+                                    title="Duplicate Layer"
                                 >
-                                    <Copy size={12} />
+                                    <Copy size={14} />
                                 </motion.button>
                                 <motion.button
-                                    whileHover={{ scale: 1.1, color: '#ef4444' }}
+                                    whileHover={{ scale: 1.15, color: '#ef4444' }}
                                     whileTap={{ scale: 0.9 }}
                                     onClick={(e) => { e.stopPropagation(); onRemoveLayer(layer.id); }}
-                                    className="p-1 text-text-muted hover:text-accent-danger"
+                                    className="p-1.5 rounded-md bg-surface border border-transparent hover:border-accent-danger/50 text-text-muted hover:text-accent-danger transition-colors"
+                                    title="Delete Layer"
                                 >
-                                    <Trash2 size={12} />
+                                    <Trash2 size={14} />
                                 </motion.button>
                             </div>
                         </Reorder.Item>

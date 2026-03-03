@@ -11,6 +11,9 @@
     "dependencies": {
         "@asciiweb/core": "*",
         "@asciiweb/react": "*",
+        "@react-spring/three": "^9.7.5",
+        "@react-three/drei": "^9.122.0",
+        "@react-three/fiber": "^8.18.0",
         "@types/gif.js": "^0.2.5",
         "clsx": "^2.1.1",
         "framer-motion": "^12.34.0",
@@ -22,13 +25,15 @@
         "react": "^18",
         "react-dom": "^18",
         "tailwind-merge": "^3.4.0",
-        "tailwindcss-animate": "^1.0.7"
+        "tailwindcss-animate": "^1.0.7",
+        "three": "^0.183.1"
     },
     "devDependencies": {
         "@types/html2canvas": "^0.5.35",
         "@types/node": "^20",
         "@types/react": "^18",
         "@types/react-dom": "^18",
+        "@types/three": "^0.183.1",
         "autoprefixer": "^10.0.1",
         "eslint": "^8",
         "eslint-config-next": "14.1.0",

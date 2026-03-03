@@ -635,7 +635,7 @@ async function imageToKinetic(input: Buffer | string, options: AsciiOptions): Pr
     const metadata = await image.metadata();
 
     const targetWidth = width;
-    const targetHeight = height || Math.floor((metadata.height! / metadata.width!) * width * 0.55);
+    const targetHeight = height || Math.floor((metadata.height! / metadata.width!) * width * 0.6);
 
     let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
     if (options.clahe) pipeline = pipeline.clahe({ width: 3, height: 3 });
