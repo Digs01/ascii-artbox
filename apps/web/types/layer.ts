@@ -24,6 +24,8 @@ export interface LayerOptions {
     overlayText: string;
     depthMode: boolean;
     edgeThreshold: number;
+    modelRenderMode?: 'viewport' | 'ascii-point-cloud';
+    modelAutoRotate?: boolean;
 }
 
 export interface LayerTransform {
@@ -50,7 +52,7 @@ export interface Layer {
     name: string;
     visible: boolean;
     locked: boolean;
-    type: 'image' | 'video' | 'text';
+    type: 'image' | 'video' | 'text' | 'model';
     file: File | null;
     previewUrl: string | null;
     frames: string[]; // generated ASCII frames
@@ -60,5 +62,19 @@ export interface Layer {
     metadata?: {
         originalWidth?: number;
         originalHeight?: number;
-    }
+    };
+    animationTracks?: KeyframeTrack[]; // Added for node-based parameter animation
+}
+
+// --- Keyframing Types ---
+export interface Keyframe {
+    id: string;
+    time: number; // usually in seconds
+    value: number | string | boolean | any;
+    easing?: 'linear' | 'ease-in' | 'ease-out' | 'ease-in-out' | 'step';
+}
+
+export interface KeyframeTrack {
+    property: string; // The dot-notated path, e.g., 'transform.scale', 'options.fontSize'
+    keyframes: Keyframe[];
 }
