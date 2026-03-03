@@ -57,13 +57,16 @@ export function LayerManager({
                             transition={{ duration: 0.2 }}
                             onClick={() => onSelectLayer(layer.id)}
                             className={clsx(
-                                "flex items-center gap-3 p-3 rounded cursor-pointer border-2 select-none group relative overflow-hidden transition-all",
+                                "flex items-center gap-3 p-3 rounded cursor-pointer border select-none group relative overflow-hidden transition-all",
                                 activeLayerId === layer.id
-                                    ? 'bg-surface-active border-accent-success/50 shadow-md'
+                                    ? 'bg-surface-active border-border shadow-md'
                                     : 'bg-surface/50 border-transparent hover:bg-surface-hover/80 hover:border-border'
                             )}
                             whileDrag={{ scale: 1.02, boxShadow: "0 5px 15px rgba(0,0,0,0.15)", zIndex: 50 }}
                         >
+                            {activeLayerId === layer.id && (
+                                <div className="absolute left-0 top-0 bottom-0 w-[3px] bg-accent-primary" />
+                            )}
                             <div className="cursor-grab active:cursor-grabbing text-text-muted hover:text-text-secondary py-2 -ml-2">
                                 <GripVertical size={14} />
                             </div>

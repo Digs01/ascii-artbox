@@ -8,6 +8,8 @@ interface TimelineProps {
     currentTime: number;
     maxDuration: number;
     isPlaying: boolean;
+    autoKeyframe?: boolean;
+    onToggleAutoKeyframe?: () => void;
     onSeek: (time: number) => void;
     onAddKeyframe: (layerId: string, property: string, time: number, value: any) => void;
     onRemoveKeyframe: (layerId: string, property: string, keyframeId: string) => void;
@@ -69,6 +71,8 @@ export const Timeline: React.FC<TimelineProps> = ({
     currentTime,
     maxDuration,
     isPlaying,
+    autoKeyframe = false,
+    onToggleAutoKeyframe,
     onSeek,
     onAddKeyframe,
     onRemoveKeyframe,
@@ -80,9 +84,9 @@ export const Timeline: React.FC<TimelineProps> = ({
     const [isScrubbing, setIsScrubbing] = useState(false);
     const [hoveredTime, setHoveredTime] = useState<number | null>(null);
     const [expandedGroups, setExpandedGroups] = useState<Record<string, boolean>>({
-        'Position': true,
-        'Transform': true,
-        'Appearance': true,
+        'Position': false,
+        'Transform': false,
+        'Appearance': false,
     });
     const [editingKf, setEditingKf] = useState<EditingKeyframe | null>(null);
     const [editValue, setEditValue] = useState('');
@@ -228,6 +232,21 @@ export const Timeline: React.FC<TimelineProps> = ({
                         <span className="text-zinc-500 text-[9px]">{totalKeyframes} keys</span>
                     </div>
                 )}
+                {/* Auto-Keyframe REC Toggle */}
+                {onToggleAutoKeyframe && (
+                    <button
+                        onClick={onToggleAutoKeyframe}
+                        title={autoKeyframe ? 'Auto-Keyframe ON: slider changes are recorded as keyframes' : 'Auto-Keyframe OFF: click to enable'}
+                        className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-widest border transition-all duration-200 ${autoKeyframe
+                                ? 'bg-red-500/15 border-red-500/40 text-red-400 hover:bg-red-500/25'
+                                : 'bg-white/[0.03] border-white/[0.06] text-zinc-600 hover:text-zinc-400'
+                            }`}
+                    >
+                        <div className={`w-1.5 h-1.5 rounded-full ${autoKeyframe ? 'bg-red-400 timeline-pulse-dot' : 'bg-zinc-700'
+                            }`} />
+                        REC
+                    </button>
+                )}
                 {activeLayer && (
                     <div className="flex items-center gap-1.5 bg-white/[0.04] rounded px-2 py-0.5 border border-white/[0.06]">
                         <div className="w-1 h-1 rounded-full bg-emerald-400/70" />
@@ -333,10 +352,10 @@ export const Timeline: React.FC<TimelineProps> = ({
                             ))}
                             {/* Playhead on Ruler */}
                             <div className="absolute top-0 bottom-0 z-30 pointer-events-none" style={{ left: `${playheadLeft}px` }}>
-                                <div className="w-px h-full bg-white/80" />
+                                <div className="absolute top-0 bottom-0 w-px bg-blue-500 opacity-80" />
                                 <div className="absolute -top-px -translate-x-1/2 left-px">
                                     <svg width="11" height="14" viewBox="0 0 11 14" fill="none">
-                                        <path d="M0.5 0H10.5V8L5.5 13L0.5 8V0Z" fill="white" fillOpacity="0.9" />
+                                        <path d="M0.5 0H10.5V8L5.5 13L0.5 8V0Z" fill="#3b82f6" />
                                     </svg>
                                 </div>
                             </div>
@@ -365,7 +384,7 @@ export const Timeline: React.FC<TimelineProps> = ({
 
                             {/* Playhead through tracks */}
                             <div className="absolute top-0 bottom-0 z-20 pointer-events-none" style={{ left: `${playheadLeft}px` }}>
-                                <div className="w-px h-full bg-white/40" />
+                                <div className="w-px h-full bg-blue-500/40" />
                             </div>
 
                             {/* Track Rows */}

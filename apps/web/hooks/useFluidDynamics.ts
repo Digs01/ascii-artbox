@@ -128,6 +128,24 @@ export function useFluidDynamics(options: {
         return { x: 0, y: 0 };
     }, [enabled, gridResolution]);
 
+    // Expose raw Float32Array for WebGL DataTextures (RGBA float format: r=vx, g=vy, b=0, a=0)
+    const getWebGlTextureData = useCallback(() => {
+        if (!enabled) return null;
+        const { grid, width: w, height: h } = fluidRef.current;
+        const data = new Float32Array(w * h * 4);
+
+        for (let y = 0; y < h; y++) {
+            for (let x = 0; x < w; x++) {
+                const idx = (y * w + x) * 4;
+                data[idx] = grid[y][x].vx;     // R
+                data[idx + 1] = grid[y][x].vy; // G
+                data[idx + 2] = 0;             // B
+                data[idx + 3] = 0;             // A
+            }
+        }
+        return { data, width: w, height: h };
+    }, [enabled]);
+
     const resize = useCallback((w: number, h: number) => {
         const cols = Math.ceil(w / gridResolution);
         const rows = Math.ceil(h / gridResolution);
@@ -138,5 +156,5 @@ export function useFluidDynamics(options: {
         };
     }, [gridResolution]);
 
-    return { pointerMove, getDisplacement, resize };
+    return { pointerMove, getDisplacement, getWebGlTextureData, resize };
 }

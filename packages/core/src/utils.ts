@@ -2,7 +2,7 @@
 export const SIMPLE_CHARSET = " .:-=+*#%@";
 export const DENSE_CHARSET = "$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,\"^`'. ";
 
-export type RenderMode = 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette' | 'kinetic';
+export type RenderMode = 'standard' | 'braille' | 'edge' | 'halfblock' | 'silhouette' | 'kinetic' | 'halftone' | 'matrix' | 'crosshatch' | 'mosaic' | 'outline' | 'stipple';
 
 export interface Color {
     r: number;

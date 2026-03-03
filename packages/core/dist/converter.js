@@ -49,6 +49,24 @@ async function imageToAscii(input, options = {}) {
     if (renderMode === 'kinetic') {
         return imageToKinetic(input, options);
     }
+    if (renderMode === 'halftone') {
+        return imageToHalftone(input, options);
+    }
+    if (renderMode === 'matrix') {
+        return imageToMatrix(input, options);
+    }
+    if (renderMode === 'crosshatch') {
+        return imageToCrosshatch(input, options);
+    }
+    if (renderMode === 'mosaic') {
+        return imageToMosaic(input, options);
+    }
+    if (renderMode === 'outline') {
+        return imageToOutline(input, options);
+    }
+    if (renderMode === 'stipple') {
+        return imageToStipple(input, options);
+    }
     const { width = 100, height, charset = utils_1.SIMPLE_CHARSET, invert = false, transparentColor, colorTolerance = 30, colorMode = false, posterize, clahe: useClahe = false, dither = false, } = options;
     const transparentRgb = transparentColor ? (0, utils_1.hexToRgb)(transparentColor) : null;
     const image = (0, sharp_1.default)(input);
@@ -596,6 +614,430 @@ async function imageToKinetic(input, options) {
             charIndex++;
         }
         result += '\n'; // Keep newlines for row splitting
+    }
+    return result;
+}
+// ═══════════════════════════════════════════════════════════════════════════
+// ═══ NEW RENDER MODES ═══════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════════
+/**
+ * Halftone — Newspaper-style circular dot pattern.
+ * Luminance is mapped to Unicode circle characters of increasing size.
+ */
+async function imageToHalftone(input, options) {
+    const { width = 100, height, invert = false, colorMode = false, posterize, clahe: useClahe = false, } = options;
+    // Graduated dot chars from empty to full
+    const DOT_CHARS = [' ', '·', '∙', '•', '●', '⬤'];
+    const image = (0, sharp_1.default)(input);
+    const metadata = await image.metadata();
+    const targetWidth = width;
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
+    if (useClahe)
+        pipeline = pipeline.clahe({ width: 3, height: 3 });
+    if (options.sharpen)
+        pipeline = pipeline.sharpen();
+    if (options.blur)
+        pipeline = pipeline.blur(options.blur);
+    const { data, info } = await pipeline.raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+    const w = info.width;
+    const h = info.height;
+    let result = '';
+    for (let i = 0; i < w * h; i++) {
+        const offset = i * 4;
+        let r = data[offset], g = data[offset + 1], b = data[offset + 2];
+        if (posterize && posterize >= 2) {
+            r = (0, utils_1.posterizeChannel)(r, posterize);
+            g = (0, utils_1.posterizeChannel)(g, posterize);
+            b = (0, utils_1.posterizeChannel)(b, posterize);
+        }
+        let lum = (0, utils_1.getLuminance)(r, g, b);
+        if (options.noise && options.noise > 0) {
+            lum += (Math.random() - 0.5) * options.noise * 2;
+        }
+        const val = invert ? 255 - lum : lum;
+        const idx = Math.min(DOT_CHARS.length - 1, Math.floor((val / 256) * DOT_CHARS.length));
+        const char = DOT_CHARS[idx];
+        if ((colorMode || options.palette) && char !== ' ') {
+            let finalR = r, finalG = g, finalB = b;
+            if (options.palette) {
+                const pColor = (0, utils_1.getColorFromPalette)(lum, options.palette);
+                if (pColor) {
+                    finalR = pColor.r;
+                    finalG = pColor.g;
+                    finalB = pColor.b;
+                }
+            }
+            result += `<span style="color:rgb(${finalR},${finalG},${finalB})">${char}</span>`;
+        }
+        else {
+            result += char;
+        }
+        if ((i + 1) % w === 0)
+            result += '\n';
+    }
+    return result;
+}
+/**
+ * Matrix Rain — Digital rain effect with katakana/symbol characters.
+ * Brightness drives character selection from a katakana set.
+ * Adds subtle vertical streaking for the rain aesthetic.
+ */
+async function imageToMatrix(input, options) {
+    const { width = 100, height, invert = false, posterize, clahe: useClahe = false, } = options;
+    // Katakana and symbols for the matrix effect
+    const MATRIX_CHARS = 'アイウエオカキクケコサシスセソタチツテトナニヌネノハヒフヘホマミムメモヤユヨラリルレロワヲン0123456789';
+    const TRAIL_CHARS = [' ', '.', ':', '░', '▒', '▓'];
+    const image = (0, sharp_1.default)(input);
+    const metadata = await image.metadata();
+    const targetWidth = width;
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
+    if (useClahe)
+        pipeline = pipeline.clahe({ width: 3, height: 3 });
+    if (options.sharpen)
+        pipeline = pipeline.sharpen();
+    if (options.blur)
+        pipeline = pipeline.blur(options.blur);
+    const { data, info } = await pipeline.raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+    const w = info.width;
+    const h = info.height;
+    // Build luminance grid
+    const lumGrid = [];
+    for (let i = 0; i < w * h; i++) {
+        const offset = i * 4;
+        let r = data[offset], g = data[offset + 1], b = data[offset + 2];
+        if (posterize && posterize >= 2) {
+            r = (0, utils_1.posterizeChannel)(r, posterize);
+            g = (0, utils_1.posterizeChannel)(g, posterize);
+            b = (0, utils_1.posterizeChannel)(b, posterize);
+        }
+        let lum = (0, utils_1.getLuminance)(r, g, b);
+        if (options.noise && options.noise > 0) {
+            lum += (Math.random() - 0.5) * options.noise * 2;
+        }
+        lumGrid.push(invert ? 255 - lum : lum);
+    }
+    let result = '';
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const idx = y * w + x;
+            const lum = lumGrid[idx];
+            const brightness = lum / 255;
+            let char;
+            if (brightness < 0.1) {
+                char = ' ';
+            }
+            else if (brightness < 0.3) {
+                char = TRAIL_CHARS[Math.floor(brightness * TRAIL_CHARS.length)];
+            }
+            else {
+                // Pick a katakana based on position + brightness for visual variety
+                const charIdx = Math.floor((x * 7 + y * 13 + Math.floor(brightness * 100)) % MATRIX_CHARS.length);
+                char = MATRIX_CHARS[charIdx];
+            }
+            // Always green-tinted for matrix effect, with brightness variation
+            const green = Math.floor(50 + brightness * 205);
+            const red = Math.floor(brightness * 30);
+            const blue = Math.floor(brightness * 20);
+            result += `<span style="color:rgb(${red},${green},${blue})">${char}</span>`;
+        }
+        result += '\n';
+    }
+    return result;
+}
+/**
+ * Crosshatch — Pen-sketch style with layered diagonal strokes.
+ * Darker areas get more overlapping hatch layers.
+ */
+async function imageToCrosshatch(input, options) {
+    const { width = 100, height, invert = false, colorMode = false, posterize, clahe: useClahe = false, } = options;
+    // From lightest to darkest: more hatching = more ink
+    const HATCH_CHARS = [' ', '·', '╌', '╱', '╲', '╳', '▒', '▓', '█'];
+    const image = (0, sharp_1.default)(input);
+    const metadata = await image.metadata();
+    const targetWidth = width;
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
+    if (useClahe)
+        pipeline = pipeline.clahe({ width: 3, height: 3 });
+    if (options.sharpen)
+        pipeline = pipeline.sharpen();
+    if (options.blur)
+        pipeline = pipeline.blur(options.blur);
+    const { data, info } = await pipeline.raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+    const w = info.width;
+    const h = info.height;
+    let result = '';
+    for (let i = 0; i < w * h; i++) {
+        const offset = i * 4;
+        let r = data[offset], g = data[offset + 1], b = data[offset + 2];
+        if (posterize && posterize >= 2) {
+            r = (0, utils_1.posterizeChannel)(r, posterize);
+            g = (0, utils_1.posterizeChannel)(g, posterize);
+            b = (0, utils_1.posterizeChannel)(b, posterize);
+        }
+        let lum = (0, utils_1.getLuminance)(r, g, b);
+        if (options.noise && options.noise > 0) {
+            lum += (Math.random() - 0.5) * options.noise * 2;
+        }
+        // Invert: dark areas should have dense hatching
+        const darkness = invert ? lum / 255 : 1 - lum / 255;
+        const idx = Math.min(HATCH_CHARS.length - 1, Math.floor(darkness * HATCH_CHARS.length));
+        const char = HATCH_CHARS[idx];
+        if ((colorMode || options.palette) && char !== ' ') {
+            let finalR = r, finalG = g, finalB = b;
+            if (options.palette) {
+                const pColor = (0, utils_1.getColorFromPalette)(lum, options.palette);
+                if (pColor) {
+                    finalR = pColor.r;
+                    finalG = pColor.g;
+                    finalB = pColor.b;
+                }
+            }
+            result += `<span style="color:rgb(${finalR},${finalG},${finalB})">${char}</span>`;
+        }
+        else {
+            result += char;
+        }
+        if ((i + 1) % w === 0)
+            result += '\n';
+    }
+    return result;
+}
+/**
+ * Mosaic — Block mosaic that averages NxN pixel groups into single Unicode block chars.
+ * Always outputs HTML with color for a stained-glass / mosaic tile look.
+ */
+async function imageToMosaic(input, options) {
+    const { width = 100, height, invert = false, posterize, clahe: useClahe = false, } = options;
+    const BLOCK_CHARS = [' ', '░', '▒', '▓', '█'];
+    const image = (0, sharp_1.default)(input);
+    const metadata = await image.metadata();
+    const targetWidth = width;
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
+    if (useClahe)
+        pipeline = pipeline.clahe({ width: 3, height: 3 });
+    if (options.sharpen)
+        pipeline = pipeline.sharpen();
+    if (options.blur)
+        pipeline = pipeline.blur(options.blur);
+    const { data, info } = await pipeline.raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+    const w = info.width;
+    const h = info.height;
+    let result = '';
+    for (let i = 0; i < w * h; i++) {
+        const offset = i * 4;
+        let r = data[offset], g = data[offset + 1], b = data[offset + 2];
+        if (posterize && posterize >= 2) {
+            r = (0, utils_1.posterizeChannel)(r, posterize);
+            g = (0, utils_1.posterizeChannel)(g, posterize);
+            b = (0, utils_1.posterizeChannel)(b, posterize);
+        }
+        let lum = (0, utils_1.getLuminance)(r, g, b);
+        if (options.noise && options.noise > 0) {
+            lum += (Math.random() - 0.5) * options.noise * 2;
+        }
+        const val = invert ? 255 - lum : lum;
+        const idx = Math.min(BLOCK_CHARS.length - 1, Math.floor((val / 256) * BLOCK_CHARS.length));
+        const char = BLOCK_CHARS[idx];
+        // Quantize colors to create a mosaic tile feel (reduce to 8 levels per channel)
+        const qR = Math.round(r / 32) * 32;
+        const qG = Math.round(g / 32) * 32;
+        const qB = Math.round(b / 32) * 32;
+        let finalR = qR, finalG = qG, finalB = qB;
+        if (options.palette) {
+            const pColor = (0, utils_1.getColorFromPalette)(lum, options.palette);
+            if (pColor) {
+                finalR = pColor.r;
+                finalG = pColor.g;
+                finalB = pColor.b;
+            }
+        }
+        if (char === ' ') {
+            result += ' ';
+        }
+        else {
+            result += `<span style="color:rgb(${finalR},${finalG},${finalB})">${char}</span>`;
+        }
+        if ((i + 1) % w === 0)
+            result += '\n';
+    }
+    return result;
+}
+/**
+ * Outline — Contour tracing using Canny-style edge detection with box-drawing characters.
+ * Produces clean, architectural outlines with directional line characters.
+ * Uses a two-pass approach: gradient magnitude for edge detection, then direction for character selection.
+ */
+async function imageToOutline(input, options) {
+    const { width = 100, height, invert = false, colorMode = false, edgeThreshold = 25, clahe: useClahe = false, } = options;
+    const image = (0, sharp_1.default)(input);
+    const metadata = await image.metadata();
+    const targetWidth = width;
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    // Pre-blur slightly more than edge mode for cleaner outlines
+    let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
+    if (useClahe)
+        pipeline = pipeline.clahe({ width: 3, height: 3 });
+    pipeline = pipeline.blur(1.2); // Always blur slightly for cleaner contours
+    if (options.sharpen)
+        pipeline = pipeline.sharpen();
+    const { data, info } = await pipeline.raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+    const w = info.width;
+    const h = info.height;
+    // Build greyscale grid
+    const grey = [];
+    const pixels = [];
+    for (let i = 0; i < w * h; i++) {
+        const offset = i * 4;
+        const r = data[offset], g = data[offset + 1], b = data[offset + 2];
+        pixels.push({ r, g, b });
+        grey.push((0, utils_1.getLuminance)(r, g, b));
+    }
+    const getLum = (x, y) => {
+        if (x < 0 || x >= w || y < 0 || y >= h)
+            return 0;
+        return grey[y * w + x];
+    };
+    // Box-drawing direction characters for clean outlines
+    const DIR_CHARS = {
+        horizontal: '─',
+        vertical: '│',
+        diagRight: '╱',
+        diagLeft: '╲',
+        corner_tl: '╭',
+        corner_tr: '╮',
+        corner_bl: '╰',
+        corner_br: '╯',
+        cross: '┼',
+        tee_down: '┬',
+        tee_up: '┴',
+    };
+    let result = '';
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            // Sobel operator
+            const gx = -getLum(x - 1, y - 1) + getLum(x + 1, y - 1)
+                - 2 * getLum(x - 1, y) + 2 * getLum(x + 1, y)
+                - getLum(x - 1, y + 1) + getLum(x + 1, y + 1);
+            const gy = -getLum(x - 1, y - 1) - 2 * getLum(x, y - 1) - getLum(x + 1, y - 1)
+                + getLum(x - 1, y + 1) + 2 * getLum(x, y + 1) + getLum(x + 1, y + 1);
+            const magnitude = Math.sqrt(gx * gx + gy * gy);
+            const threshold = invert ? 255 - edgeThreshold : edgeThreshold;
+            if (magnitude < threshold) {
+                result += ' ';
+            }
+            else {
+                const angle = Math.atan2(gy, gx) * (180 / Math.PI);
+                let char;
+                if (angle >= -22.5 && angle < 22.5)
+                    char = DIR_CHARS.vertical;
+                else if (angle >= 22.5 && angle < 67.5)
+                    char = DIR_CHARS.diagLeft;
+                else if (angle >= 67.5 && angle < 112.5)
+                    char = DIR_CHARS.horizontal;
+                else if (angle >= 112.5 && angle < 157.5)
+                    char = DIR_CHARS.diagRight;
+                else if (angle >= -67.5 && angle < -22.5)
+                    char = DIR_CHARS.diagRight;
+                else if (angle >= -112.5 && angle < -67.5)
+                    char = DIR_CHARS.horizontal;
+                else if (angle >= -157.5 && angle < -112.5)
+                    char = DIR_CHARS.diagLeft;
+                else
+                    char = DIR_CHARS.vertical;
+                // Thicker edges get cross characters
+                if (magnitude > threshold * 3)
+                    char = DIR_CHARS.cross;
+                if (colorMode) {
+                    const px = pixels[y * w + x];
+                    result += `<span style="color:rgb(${px.r},${px.g},${px.b})">${char}</span>`;
+                }
+                else {
+                    result += char;
+                }
+            }
+        }
+        result += '\n';
+    }
+    return result;
+}
+/**
+ * Stipple — Pointillism / stippling effect.
+ * Random dot placement probability proportional to darkness.
+ * Dense dots in shadows, sparse in highlights.
+ */
+async function imageToStipple(input, options) {
+    const { width = 100, height, invert = false, colorMode = false, posterize, clahe: useClahe = false, } = options;
+    // Dot characters for stipple density
+    const STIPPLE_CHARS = [' ', ' ', ' ', '·', '·', '∙', '•', '●'];
+    const image = (0, sharp_1.default)(input);
+    const metadata = await image.metadata();
+    const targetWidth = width;
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
+    if (useClahe)
+        pipeline = pipeline.clahe({ width: 3, height: 3 });
+    if (options.sharpen)
+        pipeline = pipeline.sharpen();
+    if (options.blur)
+        pipeline = pipeline.blur(options.blur);
+    const { data, info } = await pipeline.raw().ensureAlpha().toBuffer({ resolveWithObject: true });
+    const w = info.width;
+    const h = info.height;
+    // Seeded pseudo-random for consistent output per pixel position
+    const seededRandom = (x, y) => {
+        const n = Math.sin(x * 12.9898 + y * 78.233) * 43758.5453;
+        return n - Math.floor(n);
+    };
+    let result = '';
+    for (let y = 0; y < h; y++) {
+        for (let x = 0; x < w; x++) {
+            const i = y * w + x;
+            const offset = i * 4;
+            let r = data[offset], g = data[offset + 1], b = data[offset + 2];
+            if (posterize && posterize >= 2) {
+                r = (0, utils_1.posterizeChannel)(r, posterize);
+                g = (0, utils_1.posterizeChannel)(g, posterize);
+                b = (0, utils_1.posterizeChannel)(b, posterize);
+            }
+            let lum = (0, utils_1.getLuminance)(r, g, b);
+            if (options.noise && options.noise > 0) {
+                lum += (Math.random() - 0.5) * options.noise * 2;
+            }
+            // Darkness = probability of placing a dot
+            const darkness = invert ? lum / 255 : 1 - lum / 255;
+            const rand = seededRandom(x, y);
+            let char;
+            if (rand > darkness) {
+                char = ' ';
+            }
+            else {
+                // Denser dots for darker areas
+                const dotIdx = Math.min(STIPPLE_CHARS.length - 1, Math.floor(darkness * STIPPLE_CHARS.length));
+                char = STIPPLE_CHARS[dotIdx];
+                if (char === ' ')
+                    char = '·'; // Ensure at least a small dot when selected
+            }
+            if ((colorMode || options.palette) && char !== ' ') {
+                let finalR = r, finalG = g, finalB = b;
+                if (options.palette) {
+                    const pColor = (0, utils_1.getColorFromPalette)(lum, options.palette);
+                    if (pColor) {
+                        finalR = pColor.r;
+                        finalG = pColor.g;
+                        finalB = pColor.b;
+                    }
+                }
+                result += `<span style="color:rgb(${finalR},${finalG},${finalB})">${char}</span>`;
+            }
+            else {
+                result += char;
+            }
+        }
+        result += '\n';
     }
     return result;
 }
