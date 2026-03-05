@@ -69,6 +69,41 @@ export function renderLayersToCanvas(
             ctx.globalCompositeOperation = layer.transform.blendMode as GlobalCompositeOperation;
         }
 
+        // Draw Layer Background (for obscuring)
+        // If removeBackground is true, we don't draw it.
+        if (!layer.options.removeBackground && layer.options.bgTheme?.bg) {
+            // We need to calculate the bounding box based on the rendered text size.
+            // Since we're centered, the box goes from -boxWidth/2 to boxWidth/2
+            let boxWidth = 0;
+            let boxHeight = 0;
+            const lines = frame.split('\n');
+            const fontSize = layer.options.fontSize;
+
+            boxHeight = lines.length * fontSize;
+
+            if (layer.options.renderMode === 'kinetic') {
+                const firstLineChars = lines[0] ? lines[0].split('|').filter(Boolean).length : 0;
+                boxWidth = firstLineChars * ctx.measureText('A').width;
+            } else if (layer.options.colorMode && frame.includes('<span')) {
+                // Approximate for color HTML (stripping tags)
+                let maxLen = 0;
+                lines.forEach(l => {
+                    const clean = l.replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&nbsp;/g, ' ');
+                    if (clean.length > maxLen) maxLen = clean.length;
+                });
+                boxWidth = maxLen * (fontSize * 0.6);
+            } else {
+                let maxLen = 0;
+                lines.forEach(l => { if (l.length > maxLen) maxLen = l.length; });
+                boxWidth = maxLen * (fontSize * 0.6);
+            }
+
+            if (boxWidth > 0 && boxHeight > 0) {
+                ctx.fillStyle = layer.options.bgTheme.bg;
+                ctx.fillRect(-boxWidth / 2, -boxHeight / 2, boxWidth, boxHeight);
+            }
+        }
+
         // Font Settings
         const fontSize = layer.options.fontSize;
         ctx.font = `${fontSize}px monospace`;
@@ -213,6 +248,15 @@ export function useAsciiCanvasRenderer({
 }: UseAsciiCanvasRendererProps) {
     const canvasRef = useRef<HTMLCanvasElement | null>(null);
     const [stream, setStream] = useState<MediaStream | null>(null);
+
+    // Cleanup stream tracks on unmount to free resources
+    useEffect(() => {
+        return () => {
+            if (stream) {
+                stream.getTracks().forEach(track => track.stop());
+            }
+        };
+    }, [stream]);
 
     // Initialize Canvas & Stream
     useEffect(() => {

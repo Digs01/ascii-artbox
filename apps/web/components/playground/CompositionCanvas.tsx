@@ -189,12 +189,12 @@ export function CompositionCanvas({
                         }}
                     />
                 )}
-
-                {[...layers].reverse().map((layer, index) => (
+                {layers.map((layer, index) => (
                     <AsciiLayer
                         key={layer.id}
                         layer={layer}
                         index={index}
+                        totalLayers={layers.length}
                         activeLayerId={activeLayerId}
                         globalFrameCount={globalFrameCount}
                         currentTime={currentTime}
@@ -213,6 +213,7 @@ export function CompositionCanvas({
 const AsciiLayer = memo(({
     layer,
     index,
+    totalLayers,
     activeLayerId,
     globalFrameCount,
     currentTime,
@@ -223,6 +224,7 @@ const AsciiLayer = memo(({
 }: {
     layer: Layer;
     index: number;
+    totalLayers: number;
     activeLayerId: string | null;
     globalFrameCount: number;
     currentTime: number;
@@ -332,7 +334,7 @@ const AsciiLayer = memo(({
     }
 
     return (
-        <div className="absolute w-full h-full pointer-events-none">
+        <div className="absolute w-full h-full pointer-events-none" style={{ zIndex: totalLayers - index }}>
             {svgFilter}
             <div
                 className={`absolute origin-center select-none pointer-events-auto ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
@@ -345,7 +347,8 @@ const AsciiLayer = memo(({
                     opacity: transform.opacity,
                     mixBlendMode: transform.blendMode as any,
                     filter: filterStyle,
-                    transformStyle: "preserve-3d"
+                    transformStyle: "preserve-3d",
+                    backgroundColor: options.removeBackground ? 'transparent' : (options.bgTheme?.bg || 'transparent')
                 }}
                 onMouseDown={(e) => onMouseDown(e, layer)}
             >

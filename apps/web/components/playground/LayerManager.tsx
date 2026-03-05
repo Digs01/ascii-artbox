@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 import { Layer } from '../../types/layer';
 import { Button } from '../../components/ui/Button';
 import { GripVertical, Eye, EyeOff, Trash2, Copy, Lock, Unlock } from 'lucide-react';
@@ -16,6 +18,7 @@ interface LayerManagerProps {
     onDuplicateLayer: (id: string) => void;
     onReorderLayers: (layers: Layer[]) => void;
     onAddLayer: () => void;
+    onUpdateLayer: (id: string, updates: Partial<Layer>) => void;
 }
 
 export function LayerManager({
@@ -27,8 +30,29 @@ export function LayerManager({
     onRemoveLayer,
     onDuplicateLayer,
     onReorderLayers,
-    onAddLayer
+    onAddLayer,
+    onUpdateLayer
 }: LayerManagerProps) {
+    const [editingId, setEditingId] = useState<string | null>(null);
+    const [tempName, setTempName] = useState("");
+
+    const handleStartRename = (e: React.MouseEvent, layer: Layer) => {
+        e.stopPropagation();
+        setEditingId(layer.id);
+        setTempName(layer.name);
+    };
+
+    const handleCommitRename = () => {
+        if (editingId && tempName.trim()) {
+            onUpdateLayer(editingId, { name: tempName.trim() });
+        }
+        setEditingId(null);
+    };
+
+    const handleKeyDown = (e: React.KeyboardEvent) => {
+        if (e.key === 'Enter') handleCommitRename();
+        if (e.key === 'Escape') setEditingId(null);
+    };
 
     return (
         <div className="flex flex-col gap-2 bg-surface/40 rounded-lg p-2 border border-border">
@@ -50,12 +74,12 @@ export function LayerManager({
                         <Reorder.Item
                             key={layer.id}
                             value={layer}
-                            dragListener={!layer.locked}
+                            dragListener={!layer.locked && editingId !== layer.id}
                             initial={{ opacity: 0, height: 0 }}
                             animate={{ opacity: 1, height: 'auto' }}
                             exit={{ opacity: 0, height: 0 }}
                             transition={{ duration: 0.2 }}
-                            onClick={() => onSelectLayer(layer.id)}
+                            onClick={() => !editingId && onSelectLayer(layer.id)}
                             className={clsx(
                                 "flex items-center gap-3 p-3 rounded cursor-pointer border select-none group relative overflow-hidden transition-all",
                                 activeLayerId === layer.id
@@ -88,7 +112,25 @@ export function LayerManager({
                             </div>
 
                             <div className="flex-1 min-w-0 flex flex-col justify-center">
-                                <div className="text-xs font-bold truncate text-text-primary leading-tight">{layer.name}</div>
+                                {editingId === layer.id ? (
+                                    <input
+                                        autoFocus
+                                        value={tempName}
+                                        onChange={(e) => setTempName(e.target.value)}
+                                        onBlur={handleCommitRename}
+                                        onKeyDown={handleKeyDown}
+                                        onClick={(e) => e.stopPropagation()}
+                                        className="text-xs font-bold bg-black/50 border border-accent-primary rounded px-1 py-0.5 text-text-primary focus:outline-none w-full"
+                                    />
+                                ) : (
+                                    <div
+                                        className="text-xs font-bold truncate text-text-primary leading-tight hover:text-accent-primary transition-colors"
+                                        onDoubleClick={(e) => handleStartRename(e, layer)}
+                                        title="Double click to rename"
+                                    >
+                                        {layer.name}
+                                    </div>
+                                )}
                                 <div className="text-[10px] text-text-muted uppercase font-bold tracking-wider leading-tight mt-1">{layer.type}</div>
                             </div>
 

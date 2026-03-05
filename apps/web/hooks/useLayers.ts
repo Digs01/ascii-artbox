@@ -52,9 +52,31 @@ const DEFAULT_TRANSFORM: LayerTransform = {
     }
 };
 
+const createInitialLayer = (): Layer => ({
+    id: generateId(),
+    name: 'Layer 1',
+    visible: true,
+    locked: false,
+    type: 'image',
+    file: null,
+    previewUrl: null,
+    frames: [],
+    fps: 12,
+    options: { ...DEFAULT_OPTIONS },
+    transform: { ...DEFAULT_TRANSFORM },
+    animationTracks: []
+});
+
 export function useLayers() {
-    const { state: layers, set: setLayers, replace: replaceLayers, undo, redo, canUndo, canRedo } = useHistory<Layer[]>([]);
+    const { state: layers, set: setLayers, replace: replaceLayers, undo, redo, canUndo, canRedo } = useHistory<Layer[]>([createInitialLayer()]);
     const [activeLayerId, setActiveLayerId] = useState<string | null>(null);
+
+    // Set initial active layer
+    useMemo(() => {
+        if (!activeLayerId && layers.length > 0) {
+            setActiveLayerId(layers[0].id);
+        }
+    }, [activeLayerId, layers]);
 
     const activeLayer = useMemo(() =>
         layers.find(l => l.id === activeLayerId) || null
@@ -82,7 +104,13 @@ export function useLayers() {
     }, [layers.length, setLayers]);
 
     const removeLayer = useCallback((id: string) => {
-        setLayers(prev => prev.filter(l => l.id !== id));
+        setLayers(prev => {
+            const layerToRemove = prev.find(l => l.id === id);
+            if (layerToRemove?.previewUrl) {
+                URL.revokeObjectURL(layerToRemove.previewUrl);
+            }
+            return prev.filter(l => l.id !== id);
+        });
 
         if (activeLayerId === id) {
             const remaining = layers.filter(l => l.id !== id);
@@ -141,6 +169,7 @@ export function useLayers() {
             ...layer,
             id: generateId(),
             name: `${layer.name} (Copy)`,
+            previewUrl: layer.file ? URL.createObjectURL(layer.file) : layer.previewUrl,
         };
 
         setLayers(prev => [newLayer, ...prev]);

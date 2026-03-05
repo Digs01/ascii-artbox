@@ -299,13 +299,7 @@ function PlaygroundContent() {
     return () => cancelAnimationFrame(animationRef.current!);
   }, [isPlaying, playDirection, loopMode, audioAnalyzer.isListening, activeLayer?.options?.videoFps]);
 
-  // Ensure there is always at least one layer
-  useEffect(() => {
-    if (layers.length === 0) {
-      addLayer(null);
-    }
-  }, [addLayer, layers.length]);
-
+  // Loading State
   const [loading, setLoading] = useState(false);
   const [progress, setProgress] = useState(0);
 
@@ -790,6 +784,7 @@ function PlaygroundContent() {
                 onDuplicateLayer={duplicateLayer}
                 onReorderLayers={reorderLayers}
                 onAddLayer={() => addLayer(null)}
+                onUpdateLayer={updateLayer}
               />
             </motion.div>
 
