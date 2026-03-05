@@ -28,6 +28,7 @@ import { NodeEditor } from '../../components/playground/NodeEditor';
 import { useNodeGraph } from '../../hooks/useNodeGraph';
 import html2canvas from 'html2canvas';
 import { useGifExport } from '../../hooks/useGifExport';
+import { useVideoExport } from '../../hooks/useVideoExport';
 import { downloadReactComponent } from '../../utils/exportReactComponent';
 
 const DEFAULT_CHARSET = " .:-=+*#%@";
@@ -192,8 +193,28 @@ function PlaygroundContent() {
 
   // GIF Export
   const { isExporting: isGifExporting, progress: gifProgress, exportGif } = useGifExport({
-    compositionRef,
-    fps: 12
+    layers,
+    width: 800,
+    height: 600,
+    fps: 12,
+    audioMetrics,
+    backgroundColor: activeLayer?.options.bgTheme?.bg || '#000000'
+  });
+
+  // High-Fidelity Video Export
+  const { isExporting: isVideoExporting, progress: videoProgress, status: videoStatus, exportVideo } = useVideoExport({
+    targetRef: compositionRef,
+    fps: 60, // Targeting smooth 60fps captures
+    width: 1920,
+    height: 1080,
+    onSeekFrame: async (t) => {
+      // Stop playback if playing
+      if (isPlaying) setIsPlaying(false);
+      // Scrub the global clock
+      setCurrentTime(t);
+      // Give React a double-RAF cycle to guarantee DOM paint of complex CSS/WebGL before snapshotting
+      await new Promise(r => requestAnimationFrame(() => requestAnimationFrame(r)));
+    }
   });
 
   const [showPresetLibrary, setShowPresetLibrary] = useState(false);
@@ -278,13 +299,10 @@ function PlaygroundContent() {
     return () => cancelAnimationFrame(animationRef.current!);
   }, [isPlaying, playDirection, loopMode, audioAnalyzer.isListening, activeLayer?.options?.videoFps]);
 
-  // Initialize with one layer if empty
-  // Initialize with one layer if empty
-  const initialized = useRef(false);
+  // Ensure there is always at least one layer
   useEffect(() => {
-    if (!initialized.current && layers.length === 0) {
+    if (layers.length === 0) {
       addLayer(null);
-      initialized.current = true;
     }
   }, [addLayer, layers.length]);
 
@@ -516,6 +534,9 @@ function PlaygroundContent() {
       if (data.frames) {
         newFrames = data.frames;
         if (data.fps) newFps = data.fps;
+
+        const calculatedDuration = newFrames.length / newFps;
+        setMaxDuration(prev => Math.max(prev, Math.ceil(calculatedDuration)));
       } else if (data.ascii) {
         newFrames = [data.ascii];
       }
@@ -532,95 +553,13 @@ function PlaygroundContent() {
   };
 
   const downloadMp4 = async (activeLayerOnly = false) => {
+    // Offline Client-Side Render using WebCodecs
+    if (isVideoExporting) return;
     try {
-      if (activeLayerOnly) {
-        if (!activeLayer || activeLayer.frames.length === 0) return;
-        const isGif = activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif');
-        const isVideo = activeLayer.file?.type.startsWith('video/') || isGif;
-
-        toast('Preparing MP4 for active layer...', 'info');
-
-        const response = await fetch('/api/ascii/download-mp4', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({
-            frames: activeLayer.frames,
-            fps: isVideo ? videoFps : (activeLayer.frames.length > 1 ? 5 : 1),
-            fontSize,
-            lineHeight: fontSize + 2,
-            color,
-            backgroundColor: bgTheme.bg === 'transparent' ? '#000000' : bgTheme.bg,
-            width: 1920,
-            height: 1080
-          })
-        });
-        if (!response.ok) throw new Error((await response.json()).error);
-        const blob = await response.blob();
-        const url = window.URL.createObjectURL(blob);
-        const a = document.createElement('a'); a.href = url; a.download = `ascii-${activeLayer.name}.mp4`; a.click();
-        return;
-      }
-
-      // Composite Export
-      toast('Rendering composite video... This may take a moment.', 'info');
-
-      const payload = {
-        layers: layers.map(l => ({
-          id: l.id,
-          frames: l.frames,
-          fps: l.fps,
-          // We pass rendered options or just styling options? 
-          // Renderer needs options to render text to buffer.
-          options: {
-            fontSize: l.options.fontSize,
-            color: l.options.colorMode ? 'white' : l.options.color, // if colorMode, html usually handles it, but renderer uses sharp/svg.
-            // Wait, if colorMode is true, we have HTML spans. `renderAsciiFrameToBuffer` in renderer.ts needs to handle HTML parsing?
-            // `renderer.ts` uses `text.split` and `tspan`. It does simple rendering.
-            // It does NOT support full HTML coloring yet in `renderAsciiFrameToBuffer`.
-            // It treats text as plain text in the SVG generally unless we improved it?
-            // The current `renderer.ts` escapes XML. It does not parse spans.
-            // WE NEED TO FIX RENDERER FOR COLOR MODE OR DISABLE IT FOR VIDEO?
-            // For now, let's assume plain text or implement simple parsing if needed.
-            // If the user wants color, they need basic color.
-            backgroundColor: 'transparent', // Always transparent for compositing
-            fontFamily: 'monospace',
-            lineHeight: l.options.fontSize, // tight
-            width: l.options.width * l.options.fontSize * 0.6 // approx? No let renderer auto-calc from content
-          },
-          transform: l.transform
-        })),
-        options: {
-          width: 1920, // High fidelity 1080p export
-          height: 1080,
-          backgroundColor: options.bgTheme?.bg === 'transparent' ? '#000000' : (options.bgTheme?.bg || '#000000'),
-          fps: Number(options.videoFps) || 12, // Use global video FPS
-          // Let the backend dynamically calculate max duration based on layers
-        }
-      };
-
-      const response = await fetch('/api/ascii/download-mp4', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(payload)
-      });
-
-      if (!response.ok) {
-        const err = await response.json();
-        throw new Error(err.error || 'Download failed');
-      }
-
-      const blob = await response.blob();
-      const url = window.URL.createObjectURL(blob);
-      const a = document.createElement('a');
-      a.href = url;
-      a.download = `ascii-composite-${Date.now()}.mp4`;
-      document.body.appendChild(a);
-      a.click();
-      window.URL.revokeObjectURL(url);
-      document.body.removeChild(a);
-      toast('Composite MP4 downloaded!', 'success');
-    } catch (e: any) {
-      toast('Failed to download MP4: ' + e.message, 'error');
+      await exportVideo(maxDuration, 'mp4', `ascii-composite-${Date.now()}`);
+      toast('High-Fidelity MP4 Exported!', 'success');
+    } catch (err: any) {
+      toast(`Export Failed: ${err.message}`, 'error');
     }
   };
 
@@ -770,6 +709,11 @@ function PlaygroundContent() {
   };
 
   // Keyboard Shortcuts
+  const generateRef = useRef(generate);
+  useEffect(() => {
+    generateRef.current = generate;
+  });
+
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.target instanceof HTMLInputElement || e.target instanceof HTMLTextAreaElement) return;
@@ -778,13 +722,13 @@ function PlaygroundContent() {
 
       if (cmd && (e.key === 'Enter' || e.key === 'g')) {
         e.preventDefault();
-        generate();
+        generateRef.current();
       }
     };
 
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [generate]);
+  }, []);
 
   if (!activeLayer) {
     return (
@@ -1654,9 +1598,36 @@ function PlaygroundContent() {
             </div>
           </div>
 
-          <div ref={compositionRef} className={clsx("flex-1 relative overflow-hidden flex items-center justify-center min-h-[400px]", isRecording && "cursor-none")}
+          <div ref={compositionRef} className={clsx("flex-1 relative overflow-hidden flex items-center justify-center min-h-[400px]", isRecording && "cursor-none", isVideoExporting && "pointer-events-none")}
             style={{ background: activeLayer?.options.bgTheme?.bg || '#000000' }}
           >
+            {/* Offline Rendering Overlay */}
+            <AnimatePresence>
+              {isVideoExporting && (
+                <motion.div
+                  initial={{ opacity: 0 }}
+                  animate={{ opacity: 1 }}
+                  exit={{ opacity: 0 }}
+                  className="absolute inset-0 z-50 flex flex-col items-center justify-center bg-black/80 backdrop-blur-md"
+                >
+                  <Film className="w-12 h-12 text-blue-500 mb-6 animate-pulse" />
+                  <h2 className="text-xl font-bold tracking-widest uppercase mb-2">Offline Rendering</h2>
+                  <p className="text-sm text-zinc-400 max-w-sm text-center mb-8">
+                    {videoStatus || 'Preparing encoder...'}
+                  </p>
+
+                  <div className="w-64 h-2 bg-zinc-900 rounded-full overflow-hidden mb-8 border border-white/10">
+                    <motion.div
+                      className="h-full bg-blue-500 rounded-full"
+                      initial={{ width: 0 }}
+                      animate={{ width: `${videoProgress}%` }}
+                      transition={{ ease: "linear", duration: 0.1 }}
+                    />
+                  </div>
+                </motion.div>
+              )}
+            </AnimatePresence>
+
             {/* Composition Canvas */}
             <CompositionCanvas
               layers={layers}

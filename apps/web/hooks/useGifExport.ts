@@ -1,21 +1,31 @@
 import { useState, useCallback, useRef } from 'react';
-import html2canvas from 'html2canvas';
 // @ts-ignore
 import GIF from 'gif.js';
+import { Layer } from '../types/layer';
+import { renderLayersToCanvas } from './useAsciiCanvasRenderer';
 
 interface UseGifExportProps {
-    compositionRef: React.RefObject<HTMLDivElement>;
+    layers: Layer[];
+    width?: number;
+    height?: number;
     fps?: number;
+    audioMetrics?: { bass: number; mid: number; treble: number; volume: number };
+    backgroundColor?: string;
 }
 
-export function useGifExport({ compositionRef, fps = 10 }: UseGifExportProps) {
+export function useGifExport({
+    layers,
+    width = 800,
+    height = 600,
+    fps = 12,
+    audioMetrics,
+    backgroundColor = '#000000'
+}: UseGifExportProps) {
     const [isExporting, setIsExporting] = useState(false);
     const [progress, setProgress] = useState(0); // 0-100
     const abortControllerRef = useRef<AbortController | null>(null);
 
     const exportGif = useCallback(async (durationSeconds: number = 3, filename = 'ascii-art.gif') => {
-        if (!compositionRef.current) return;
-
         setIsExporting(true);
         setProgress(0);
         abortControllerRef.current = new AbortController();
@@ -23,35 +33,55 @@ export function useGifExport({ compositionRef, fps = 10 }: UseGifExportProps) {
         const gif = new GIF({
             workers: 2,
             quality: 10,
-            width: compositionRef.current.clientWidth,
-            height: compositionRef.current.clientHeight,
+            width: width,
+            height: height,
             workerScript: '/gif.worker.js', // Loaded from public folder
-            background: '#000000'
+            background: backgroundColor
         });
 
         const totalFrames = Math.ceil(durationSeconds * fps);
         const frameInterval = 1000 / fps; // ms per frame
+
+        // Create Offscreen Canvas for Rendering
+        const offscreenCanvas = document.createElement('canvas');
+        offscreenCanvas.width = width;
+        offscreenCanvas.height = height;
+        const ctx = offscreenCanvas.getContext('2d', { alpha: false });
+
+        if (!ctx) {
+            console.error('Failed to get 2D context for GIF export');
+            setIsExporting(false);
+            return;
+        }
 
         try {
             // Capture Loop
             for (let i = 0; i < totalFrames; i++) {
                 if (abortControllerRef.current.signal.aborted) throw new Error('Cancelled');
 
-                // Wait for next frame timing
-                await new Promise(resolve => setTimeout(resolve, frameInterval));
+                // Render specific frame to offscreen canvas
+                // We use 'i' as the globalFrameCount for the export, ensuring a clean sequence from start
+                const currentTime = i / fps;
+                renderLayersToCanvas(
+                    ctx,
+                    layers,
+                    width,
+                    height,
+                    i, // globalFrameCount logic
+                    currentTime,
+                    audioMetrics,
+                    backgroundColor
+                );
 
-                // Capture Frame
-                const canvas = await html2canvas(compositionRef.current, {
-                    useCORS: true,
-                    // @ts-ignore
-                    backgroundColor: null, // Keep transparency if any
-                    scale: 1, // Keep original size or higher for quality? Since it's huge, 1 is fine.
-                    logging: false
-                });
-
-                gif.addFrame(canvas, { delay: frameInterval, copy: true });
+                // Add frame to GIF
+                gif.addFrame(offscreenCanvas, { delay: frameInterval, copy: true });
 
                 setProgress(Math.round((i / totalFrames) * 50)); // First 50% is capturing
+
+                // Allow UI to breathe
+                if (i % 5 === 0) {
+                    await new Promise(resolve => setTimeout(resolve, 0));
+                }
             }
 
             // Rendering
@@ -80,7 +110,7 @@ export function useGifExport({ compositionRef, fps = 10 }: UseGifExportProps) {
             setProgress(0);
         }
 
-    }, [compositionRef, fps]);
+    }, [layers, width, height, fps, audioMetrics, backgroundColor]);
 
     const cancelExport = useCallback(() => {
         if (abortControllerRef.current) {

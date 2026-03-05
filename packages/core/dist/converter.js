@@ -72,7 +72,7 @@ async function imageToAscii(input, options = {}) {
     const image = (0, sharp_1.default)(input);
     const metadata = await image.metadata();
     const targetWidth = width;
-    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.6);
     let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
     if (useClahe)
         pipeline = pipeline.clahe({ width: 3, height: 3 });
@@ -286,7 +286,7 @@ async function imageToEdge(input, options = {}) {
     const image = (0, sharp_1.default)(input);
     const metadata = await image.metadata();
     const targetWidth = width;
-    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.6);
     let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' }).toColourspace('srgb');
     if (useClahe)
         pipeline = pipeline.clahe({ width: 3, height: 3 });
@@ -447,7 +447,7 @@ async function imageToSilhouette(input, options) {
     const image = (0, sharp_1.default)(input);
     const metadata = await image.metadata();
     const targetWidth = width;
-    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.55);
+    const targetHeight = height || Math.floor((metadata.height / metadata.width) * width * 0.6);
     let pipeline = image.resize(targetWidth, targetHeight, { fit: 'fill' });
     // Force sRGB (8-bit) to ensure CLAHE works
     pipeline = pipeline.toColourspace('srgb');

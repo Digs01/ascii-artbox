@@ -82,21 +82,23 @@ export function useLayers() {
     }, [layers.length, setLayers]);
 
     const removeLayer = useCallback((id: string) => {
-        setLayers(prev => {
-            const newLayers = prev.filter(l => l.id !== id);
-            // If we removed the active layer, select the next one
-            if (activeLayerId === id) {
-                // Determine new active layer ID properly? 
-                // We can't set state inside setLayers callback if it depends on result.
-                // But setActiveLayerId is outside. 
-                // We'll fix active ID in effect or just check existence in Page.
-                // For now, let's just update layers.
+        setLayers(prev => prev.filter(l => l.id !== id));
+
+        if (activeLayerId === id) {
+            const remaining = layers.filter(l => l.id !== id);
+            if (remaining.length > 0) {
+                // Try to select the layer adjacent to the deleted one if possible, otherwise the first
+                const deletedIndex = layers.findIndex(l => l.id === id);
+                if (deletedIndex > 0) {
+                    setActiveLayerId(remaining[deletedIndex - 1].id);
+                } else {
+                    setActiveLayerId(remaining[0].id);
+                }
+            } else {
+                setActiveLayerId(null);
             }
-            return newLayers;
-        });
-        // We set active ID separately if needed, but for history purposes we only track layers.
-        // If activeID becomes invalid, Page handles it.
-    }, [activeLayerId, setLayers]);
+        }
+    }, [activeLayerId, layers, setLayers]);
 
     const updateLayer = useCallback((id: string, updates: Partial<Layer>) => {
         setLayers(prev => prev.map(l => l.id === id ? { ...l, ...updates } : l));

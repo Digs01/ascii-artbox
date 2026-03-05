@@ -1,5 +1,5 @@
 import { Layer } from '../../types/layer';
-import { useCallback, useRef, useState, useEffect } from 'react';
+import { useCallback, useRef, useState, useEffect, memo } from 'react';
 import { motion, useMotionValue, useSpring, useTransform } from 'framer-motion';
 import { useFluidDynamics } from '../../hooks/useFluidDynamics';
 import { WebGLKineticRenderer } from './WebGLKineticRenderer';
@@ -190,166 +190,242 @@ export function CompositionCanvas({
                     />
                 )}
 
-                {[...layers].reverse().map((layer, index) => {
-                    if (!layer.visible) return null;
-
-                    const activeFrame = layer.frames.length > 0
-                        ? layer.frames[Math.floor(globalFrameCount) % layer.frames.length]
-                        : '';
-
-                    // --- KEYFRAME INTERPOLATION ---
-                    // Merge active layer transforms and options with interpolated keyframe values
-                    const t = layer.transform;
-                    const o = layer.options;
-                    const tracks = layer.animationTracks || [];
-
-                    let transform = {
-                        ...t,
-                        x: getInterpolatedValue(tracks, 'transform.x', currentTime, t.x),
-                        y: getInterpolatedValue(tracks, 'transform.y', currentTime, t.y),
-                        scale: getInterpolatedValue(tracks, 'transform.scale', currentTime, t.scale),
-                        rotation: getInterpolatedValue(tracks, 'transform.rotation', currentTime, t.rotation),
-                        opacity: getInterpolatedValue(tracks, 'transform.opacity', currentTime, t.opacity),
-                    };
-
-                    let options = {
-                        ...o,
-                        fontSize: getInterpolatedValue(tracks, 'options.fontSize', currentTime, o.fontSize),
-                        color: getInterpolatedValue(tracks, 'options.color', currentTime, o.color),
-                    };
-
-                    // --- AUDIO REACTIVITY ---
-                    let filterStyle = '';
-                    let svgFilter = null;
-
-                    if (audioMetrics && layer.transform.audioReact?.enabled) {
-                        const { source, target, strength, invert } = layer.transform.audioReact;
-                        const val = audioMetrics[source] || 0;
-                        const factor = invert ? (1 - val) : val;
-                        const mod = factor * strength; // 0 to ~2
-
-                        if (target === 'scale') {
-                            transform.scale = transform.scale * (1 + mod);
-                        } else if (target === 'opacity') {
-                            transform.opacity = Math.min(1, Math.max(0.1, transform.opacity * (1 + (mod - 0.5))));
-                        } else if (target === 'rotation') {
-                            transform.rotation = transform.rotation + (mod * 60 - 30);
-                        } else if (target === 'distortion') {
-                            // SVG Displacement Filter
-                            const distortionScale = mod * 60; // Increased from 30 to 60 for more visible glitch
-                            const filterId = `distort-${layer.id}`;
-                            filterStyle = `url(#${filterId})`;
-
-                            svgFilter = (
-                                <svg style={{ position: 'absolute', width: 0, height: 0 }}>
-                                    <defs>
-                                        <filter id={filterId}>
-                                            <feTurbulence type="turbulence" baseFrequency="0.02" numOctaves="3" result="noise" seed={globalFrameCount} />
-                                            <feDisplacementMap in="SourceGraphic" in2="noise" scale={distortionScale} xChannelSelector="R" yChannelSelector="G" />
-                                        </filter>
-                                    </defs>
-                                </svg>
-                            );
-                        } else if (target === 'hue') {
-                            // Force some color (sepia+saturate) so white text actually changes color
-                            filterStyle = `sepia(1) saturate(5) hue-rotate(${mod * 360}deg)`;
-                        } else if (target === 'rgb-split') {
-                            const offset = mod * 20; // Increased from 10 to 20
-                            // Use text-shadow for chromatic aberration on text
-                            // Red shift left, Blue shift right, with blur for glow
-                            filterStyle += ` drop-shadow(${offset}px 0px 2px rgba(255,0,0,0.8)) drop-shadow(-${offset}px 0px 2px rgba(0,0,255,0.8))`;
-                        }
-                    }
-
-                    // --- GLOBAL EFFECTS POST-PROCESSING ---
-                    if (globalEffects?.chromaticAberration) {
-                        filterStyle += ' drop-shadow(4px 0px 0px rgba(255,0,0,0.7)) drop-shadow(-4px 0px 0px rgba(0,255,255,0.7))';
-                    }
-
-                    if (globalEffects?.bloom) {
-                        // Phosphor bloom multiplies the color glow
-                        filterStyle += ' drop-shadow(0px 0px 8px currentColor) drop-shadow(0px 0px 16px currentColor)';
-                    }
-
-                    // --- KINETIC GRID DIMENSIONS ---
-                    let kineticSize = { w: 0, h: 0 };
-                    if (options.renderMode === 'kinetic' && activeFrame) {
-                        const fontSize = options.fontSize || 12;
-                        const lines = activeFrame.split('\n');
-                        const maxChars = lines[0] ? lines[0].split('|').filter(Boolean).length : 0;
-                        kineticSize = {
-                            w: maxChars * (fontSize * 0.6),
-                            h: lines.length * fontSize
-                        };
-                    }
-
-                    return (
-                        <div key={layer.id} className="absolute w-full h-full pointer-events-none">
-                            {svgFilter}
-                            <div
-                                className={`absolute origin-center select-none ${activeLayerId === layer.id ? 'z-10 pointer-events-auto' : 'pointer-events-auto'} ${activeLayerId === layer.id && activeFrame ? 'outline outline-1 outline-accent-primary' : ''} ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
-                                style={{
-                                    left: '50%',
-                                    top: '50%',
-                                    width: kineticSize.w > 0 ? `${kineticSize.w}px` : undefined,
-                                    height: kineticSize.h > 0 ? `${kineticSize.h}px` : undefined,
-                                    // Use transform.z or index spacing if 3D is on
-                                    transform: `translate(-50%, -50%) translate3d(${transform.x}px, ${transform.y}px, ${globalEffects?.enable3D ? index * 40 : 0}px) rotate(${transform.rotation}deg) scale(${transform.scale}) scaleX(${transform.flipX ? -1 : 1}) scaleY(${transform.flipY ? -1 : 1})`,
-                                    opacity: transform.opacity,
-                                    mixBlendMode: transform.blendMode as any,
-                                    filter: filterStyle,
-                                    transformStyle: "preserve-3d" // Pass 3D context to children
-                                }}
-                                onMouseDown={(e) => handleMouseDown(e, layer)}
-                            >
-                                {/* Render the Content */}
-                                {layer.type === 'text' ? (
-                                    <div
-                                        className="whitespace-pre-wrap font-black leading-none text-center"
-                                        style={{
-                                            fontSize: `${options.fontSize || 120}px`,
-                                            lineHeight: 1,
-                                            color: options.color,
-                                            fontFamily: 'Inter, system-ui, sans-serif' // Standard bold sans for masking
-                                        }}
-                                    >
-                                        {options.overlayText || 'TEXT'}
-                                    </div>
-                                ) : layer.type === 'model' ? (
-                                    <ModelRenderer layer={layer} />
-                                ) : options.renderMode === 'kinetic' ? (
-                                    <WebGLKineticRenderer
-                                        frame={activeFrame}
-                                        layer={{ ...layer, options, transform }}
-                                        audioMetrics={audioMetrics}
-                                        fluid={fluid}
-                                    />
-                                ) : options.colorMode || activeFrame.includes('<span') ? (
-                                    <ColorCanvasRenderer
-                                        frame={activeFrame}
-                                        layer={{ ...layer, options, transform }}
-                                        audioMetrics={audioMetrics}
-                                    />
-                                ) : (
-                                    <pre
-                                        className="whitespace-pre font-mono leading-none"
-                                        style={{
-                                            fontSize: `${options.fontSize}px`,
-                                            lineHeight: `${options.fontSize}px`,
-                                            color: options.color
-                                        }}
-                                    >
-                                        {activeFrame}
-                                    </pre>
-                                )}
-                            </div>
-                        </div>
-                    );
-                })}
+                {[...layers].reverse().map((layer, index) => (
+                    <AsciiLayer
+                        key={layer.id}
+                        layer={layer}
+                        index={index}
+                        activeLayerId={activeLayerId}
+                        globalFrameCount={globalFrameCount}
+                        currentTime={currentTime}
+                        audioMetrics={audioMetrics}
+                        globalEffects={globalEffects}
+                        onMouseDown={handleMouseDown}
+                        fluid={fluid}
+                    />
+                ))}
             </motion.div>
         </div>
     );
 }
+
+// Memoized Layer Component to isolate re-renders
+const AsciiLayer = memo(({
+    layer,
+    index,
+    activeLayerId,
+    globalFrameCount,
+    currentTime,
+    audioMetrics,
+    globalEffects,
+    onMouseDown,
+    fluid
+}: {
+    layer: Layer;
+    index: number;
+    activeLayerId: string | null;
+    globalFrameCount: number;
+    currentTime: number;
+    audioMetrics: any;
+    globalEffects: any;
+    onMouseDown: (e: React.MouseEvent, layer: Layer) => void;
+    fluid: any;
+}) => {
+    if (!layer.visible) return null;
+
+    const activeFrame = layer.frames.length > 0
+        ? layer.frames[Math.floor(currentTime * (layer.fps || 12)) % Math.max(1, layer.frames.length)]
+        : '';
+
+    // --- KEYFRAME INTERPOLATION ---
+    const t = layer.transform;
+    const o = layer.options;
+    const tracks = layer.animationTracks || [];
+
+    let transform = {
+        ...t,
+        x: getInterpolatedValue(tracks, 'transform.x', currentTime, t.x),
+        y: getInterpolatedValue(tracks, 'transform.y', currentTime, t.y),
+        scale: getInterpolatedValue(tracks, 'transform.scale', currentTime, t.scale),
+        rotation: getInterpolatedValue(tracks, 'transform.rotation', currentTime, t.rotation),
+        opacity: getInterpolatedValue(tracks, 'transform.opacity', currentTime, t.opacity),
+    };
+
+    let options = {
+        ...o,
+        fontSize: getInterpolatedValue(tracks, 'options.fontSize', currentTime, o.fontSize),
+        color: getInterpolatedValue(tracks, 'options.color', currentTime, o.color),
+    };
+
+    // --- AUDIO REACTIVITY ---
+    let filterStyle = '';
+    let svgFilter = null;
+
+    if (audioMetrics && layer.transform.audioReact?.enabled) {
+        const { source, target, strength, invert } = layer.transform.audioReact;
+        const val = audioMetrics[source] || 0;
+        const factor = invert ? (1 - val) : val;
+        const mod = factor * strength;
+
+        if (target === 'scale') {
+            transform.scale = transform.scale * (1 + mod);
+        } else if (target === 'opacity') {
+            transform.opacity = Math.min(1, Math.max(0.1, transform.opacity * (1 + (mod - 0.5))));
+        } else if (target === 'rotation') {
+            transform.rotation = transform.rotation + (mod * 60 - 30);
+        } else if (target === 'distortion') {
+            const distortionScale = mod * 60;
+            const filterId = `distort-${layer.id}`;
+            filterStyle = `url(#${filterId})`;
+
+            svgFilter = (
+                <svg style={{ position: 'absolute', width: 0, height: 0 }}>
+                    <defs>
+                        <filter id={filterId}>
+                            <feTurbulence type="turbulence" baseFrequency="0.02" numOctaves="3" result="noise" seed={globalFrameCount} />
+                            <feDisplacementMap in="SourceGraphic" in2="noise" scale={distortionScale} xChannelSelector="R" yChannelSelector="G" />
+                        </filter>
+                    </defs>
+                </svg>
+            );
+        } else if (target === 'hue') {
+            filterStyle = `sepia(1) saturate(5) hue-rotate(${mod * 360}deg)`;
+        } else if (target === 'rgb-split') {
+            const offset = mod * 20;
+            filterStyle += ` drop-shadow(${offset}px 0px 2px rgba(255,0,0,0.8)) drop-shadow(-${offset}px 0px 2px rgba(0,0,255,0.8))`;
+        }
+    }
+
+    // --- GLOBAL EFFECTS POST-PROCESSING ---
+    if (globalEffects?.chromaticAberration) {
+        filterStyle += ' drop-shadow(4px 0px 0px rgba(255,0,0,0.7)) drop-shadow(-4px 0px 0px rgba(0,255,255,0.7))';
+    }
+
+    if (globalEffects?.bloom) {
+        filterStyle += ' drop-shadow(0px 0px 8px currentColor) drop-shadow(0px 0px 16px currentColor)';
+    }
+
+    // --- GRID DIMENSIONS (Unify 0.6 Aspect Ratio) ---
+    let contentSize = { w: 0, h: 0 };
+    if (activeFrame) {
+        const fontSize = options.fontSize || 12;
+        const charAdvance = fontSize * 0.6;
+        const lines = activeFrame.split('\n');
+
+        let charCount = 0;
+        if (options.renderMode === 'kinetic') {
+            charCount = lines[0] ? lines[0].split('|').filter(Boolean).length : 0;
+        } else {
+            // Strip HTML and unescape for accurate char count
+            const firstLineClean = lines[0]
+                ? lines[0].replace(/<[^>]*>/g, '')
+                    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+                    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
+                : '';
+            charCount = firstLineClean.length;
+        }
+
+        contentSize = {
+            w: charCount * charAdvance,
+            h: lines.length * fontSize
+        };
+    }
+
+    return (
+        <div className="absolute w-full h-full pointer-events-none">
+            {svgFilter}
+            <div
+                className={`absolute origin-center select-none pointer-events-auto ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
+                style={{
+                    left: '50%',
+                    top: '50%',
+                    width: contentSize.w > 0 ? `${contentSize.w}px` : undefined,
+                    height: contentSize.h > 0 ? `${contentSize.h}px` : undefined,
+                    transform: `translate(-50%, -50%) translate3d(${transform.x}px, ${transform.y}px, ${globalEffects?.enable3D ? index * 40 : 0}px) rotate(${transform.rotation}deg) scale(${transform.scale}) scaleX(${transform.flipX ? -1 : 1}) scaleY(${transform.flipY ? -1 : 1})`,
+                    opacity: transform.opacity,
+                    mixBlendMode: transform.blendMode as any,
+                    filter: filterStyle,
+                    transformStyle: "preserve-3d"
+                }}
+                onMouseDown={(e) => onMouseDown(e, layer)}
+            >
+                {/* Render the Content */}
+                {layer.type === 'text' ? (
+                    <div
+                        className="whitespace-pre-wrap font-black leading-none text-center"
+                        style={{
+                            fontSize: `${options.fontSize || 120}px`,
+                            lineHeight: 1,
+                            color: options.color,
+                            fontFamily: 'Inter, system-ui, sans-serif'
+                        }}
+                    >
+                        {options.overlayText || 'TEXT'}
+                    </div>
+                ) : layer.type === 'model' ? (
+                    <ModelRenderer layer={layer} />
+                ) : options.renderMode === 'kinetic' ? (
+                    <WebGLKineticRenderer
+                        frame={activeFrame}
+                        layer={{ ...layer, options, transform }}
+                        audioMetrics={audioMetrics}
+                        fluid={fluid}
+                    />
+                ) : options.colorMode || activeFrame.includes('<span') ? (
+                    <ColorCanvasRenderer
+                        frame={activeFrame}
+                        layer={{ ...layer, options, transform }}
+                        audioMetrics={audioMetrics}
+                    />
+                ) : (
+                    <pre
+                        className="whitespace-pre font-mono leading-none w-full h-full text-left"
+                        style={{
+                            fontSize: `${options.fontSize}px`,
+                            lineHeight: `${options.fontSize}px`,
+                            color: options.color,
+                            margin: 0,
+                            padding: 0
+                        }}
+                    >
+                        {activeFrame}
+                    </pre>
+                )}
+            </div>
+        </div>
+    );
+}, (prev, next) => {
+    // Custom Memoization Comparison
+    // We only re-render if:
+    // 1. Layer base data / keyframes changed
+    // 2. It's the active layer (for cursor/selection)
+    // 3. CurrentTime changed AND layer has keyframes
+    // 4. Global frame count changed AND layer has multiple frames (animation)
+    // 5. Global effects changed
+    // 6. Audio metrics changed AND audio reactivity is ON
+
+    if (prev.layer !== next.layer) return false;
+    if (prev.globalEffects !== next.globalEffects) return false;
+    if (prev.activeLayerId !== next.activeLayerId && (prev.layer.id === prev.activeLayerId || prev.layer.id === next.activeLayerId)) return false;
+
+    // Check keyframe animation
+    if (prev.currentTime !== next.currentTime) {
+        const hasKeyframes = next.layer.animationTracks && next.layer.animationTracks.length > 0;
+        if (hasKeyframes) return false;
+    }
+
+    // Check frame animation
+    if (prev.globalFrameCount !== next.globalFrameCount) {
+        if (next.layer.frames.length > 1) return false;
+    }
+
+    // Audio reactivity check
+    if (prev.audioMetrics !== next.audioMetrics) {
+        if (next.layer.transform.audioReact?.enabled) return false;
+    }
+
+    return true;
+});
 
 // Dedicated inline Canvas renderer for Color HTML mode to vastly improve performance
 const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, layer: Layer, audioMetrics?: any }) => {
@@ -362,16 +438,6 @@ const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, la
         if (!ctx) return;
 
         const fontSize = layer.options.fontSize || 12;
-        let baseOpacity = layer.transform.opacity;
-
-        if (layer.transform.audioReact?.enabled && audioMetrics) {
-            const { source, target, strength, invert } = layer.transform.audioReact;
-            const val = audioMetrics[source] || 0;
-            const factor = invert ? (1 - val) : val;
-            const mod = factor * strength;
-            if (target === 'opacity') baseOpacity = Math.min(1, Math.max(0.1, baseOpacity * (1 + (mod - 0.5))));
-        }
-
         const lines = frame.split('\n');
         const tokens: { char: string, color: string, x: number, lineY: number }[] = [];
         let maxChars = 0;
@@ -428,12 +494,12 @@ const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, la
             if (currentX > maxChars) maxChars = currentX;
         });
 
-        // Use precise Monospace font rendering
+        // Use precise Monospace font rendering matching the backend aspect ratio (0.6)
         ctx.font = `${fontSize}px monospace`;
-        const charAdvance = Math.ceil(ctx.measureText('M').width) || (fontSize * 0.6);
+        const charAdvance = fontSize * 0.6; // Consistent 0.6 ratio
 
         const gridWidth = Math.ceil(maxChars * charAdvance);
-        const totalHeight = Math.ceil(lines.length * fontSize);
+        const totalHeight = lines.length * fontSize;
 
         if (canvas.width !== gridWidth || canvas.height !== totalHeight) {
             canvas.width = gridWidth || 800;
@@ -444,7 +510,6 @@ const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, la
 
         ctx.clearRect(0, 0, canvas.width, canvas.height);
         ctx.textBaseline = 'top';
-        ctx.globalAlpha = baseOpacity;
 
         // Draw batched
         let lastColor = null;
