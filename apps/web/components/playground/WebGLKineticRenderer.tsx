@@ -313,7 +313,7 @@ const AsciiInstancedMesh = ({ frame, layer, fluid }: { frame: string, layer: Lay
 };
 
 // --- Viewport Setup ---
-export const WebGLKineticRenderer = ({ frame, layer, audioMetrics, fluid }: { frame: string, layer: Layer, audioMetrics?: any, fluid?: any }) => {
+export const WebGLKineticRenderer = ({ frame, layer, audioMetrics, fluid, globalEffects }: { frame: string, layer: Layer, audioMetrics?: any, fluid?: any, globalEffects?: any }) => {
     const fontSize = layer.options.fontSize || 12;
     const lines = useMemo(() => frame ? frame.split('\n') : [], [frame]);
 
@@ -329,23 +329,30 @@ export const WebGLKineticRenderer = ({ frame, layer, audioMetrics, fluid }: { fr
         };
     }, [lines, fontSize]);
 
+    const bloomPadding = globalEffects?.bloom ? (globalEffects.bloomRadius || 8) * 3 : 2;
+    const renderWidth = gridWidth + (bloomPadding * 2);
+    const renderHeight = gridHeight + (bloomPadding * 2);
+
     return (
         <Canvas
             gl={{ alpha: true, antialias: false }}
             style={{
-                width: gridWidth > 0 ? `${gridWidth}px` : '100%',
-                height: gridHeight > 0 ? `${gridHeight}px` : '100%',
-                display: 'block'
+                width: gridWidth > 0 ? `${renderWidth}px` : '100%',
+                height: gridHeight > 0 ? `${renderHeight}px` : '100%',
+                display: 'block',
+                position: 'absolute',
+                top: -bloomPadding,
+                left: -bloomPadding
             }}
         >
             <OrthographicCamera
                 makeDefault
                 position={[0, 0, 500]}
                 zoom={1}
-                left={-gridWidth / 2}
-                right={gridWidth / 2}
-                top={gridHeight / 2}
-                bottom={-gridHeight / 2}
+                left={-renderWidth / 2}
+                right={renderWidth / 2}
+                top={renderHeight / 2}
+                bottom={-renderHeight / 2}
                 near={-1000}
                 far={1000}
             />

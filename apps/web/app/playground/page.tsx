@@ -151,6 +151,45 @@ function PlaygroundContent() {
     fluidViscosity: 0.95
   });
 
+  // Canvas View State
+  const [canvasScale, setCanvasScale] = useState(1);
+  const [canvasPan, setCanvasPan] = useState({ x: 0, y: 0 });
+  const [isCanvasPanning, setIsCanvasPanning] = useState(false);
+  const containerPanRef = useRef({ x: 0, y: 0 });
+
+  const handleCanvasWheel = useCallback((e: React.WheelEvent) => {
+    if (e.ctrlKey || e.metaKey) {
+      // Pinch to zoom or Ctrl+Scroll
+      const zoomFactor = -e.deltaY * 0.01;
+      setCanvasScale(s => Math.min(Math.max(0.1, s * (1 + zoomFactor)), 10));
+    } else {
+      // Regular scroll / Two finger trackpad = Pan
+      setCanvasPan(p => ({ x: p.x - e.deltaX, y: p.y - e.deltaY }));
+    }
+  }, []);
+
+  const handleCanvasPointerDown = useCallback((e: React.PointerEvent) => {
+    // Middle click (1) or Alt+LeftClick (0) to pan
+    if (e.button === 1 || (e.button === 0 && e.altKey)) {
+      e.preventDefault();
+      setIsCanvasPanning(true);
+      containerPanRef.current = { x: e.clientX, y: e.clientY };
+    }
+  }, []);
+
+  const handleCanvasPointerMove = useCallback((e: React.PointerEvent) => {
+    if (isCanvasPanning) {
+      const dx = e.clientX - containerPanRef.current.x;
+      const dy = e.clientY - containerPanRef.current.y;
+      setCanvasPan(p => ({ x: p.x + dx, y: p.y + dy }));
+      containerPanRef.current = { x: e.clientX, y: e.clientY };
+    }
+  }, [isCanvasPanning]);
+
+  const handleCanvasPointerUp = useCallback(() => {
+    setIsCanvasPanning(false);
+  }, []);
+
   // --- SEAMLESS RECORDER (Canvas) ---
   const { stream: canvasStream } = useAsciiCanvasRenderer({
     layers,
@@ -162,9 +201,13 @@ function PlaygroundContent() {
     backgroundColor: activeLayer?.options.bgTheme?.bg || '#111111'
   });
 
-  // Keyboard Shortcuts for Undo/Redo
+  // Keyboard Shortcuts for Undo/Redo & Playback
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      // Ignore shortcuts if the user is typing in an input or textarea
+      const target = e.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA') return;
+
       if ((e.ctrlKey || e.metaKey) && e.key === 'z') {
         e.preventDefault();
         if (e.shiftKey) {
@@ -176,6 +219,10 @@ function PlaygroundContent() {
       if ((e.ctrlKey || e.metaKey) && e.key === 'y') {
         e.preventDefault();
         canRedo && redo();
+      }
+      if (e.key === ' ' || e.code === 'Space') {
+        e.preventDefault();
+        setIsPlaying(p => !p);
       }
     };
     window.addEventListener('keydown', handleKeyDown);
@@ -217,6 +264,7 @@ function PlaygroundContent() {
     }
   });
 
+  const [showAlgoSettings, setShowAlgoSettings] = useState(false);
   const [showPresetLibrary, setShowPresetLibrary] = useState(false);
 
   useEffect(() => {
@@ -407,6 +455,7 @@ function PlaygroundContent() {
       // Add as new layer or update current?
       // UX Decision: If current layer is empty (no file), update it. Else add new.
       if (activeLayer && !activeLayer.file) {
+        if (activeLayer.previewUrl) URL.revokeObjectURL(activeLayer.previewUrl);
         updateLayer(activeLayer.id, {
           file: f,
           name: f.name,
@@ -428,6 +477,7 @@ function PlaygroundContent() {
 
       if (activeLayer) {
         // Update current layer
+        if (activeLayer.previewUrl) URL.revokeObjectURL(activeLayer.previewUrl);
         updateLayer(activeLayer.id, {
           file: f,
           name: f.name,
@@ -497,7 +547,7 @@ function PlaygroundContent() {
       formData.append('noise', noise.toString());
     }
 
-    if (renderMode === 'edge' && edgeThreshold !== undefined) {
+    if ((renderMode === 'edge' || renderMode === 'outline') && edgeThreshold !== undefined) {
       formData.append('edgeThreshold', edgeThreshold.toString());
     }
 
@@ -536,6 +586,43 @@ function PlaygroundContent() {
       }
 
       setLayerAscii(activeLayer.id, newFrames, newFps);
+
+      // Auto-scale to fit canvas (800x600)
+      if (newFrames[0]) {
+        const fontSize = activeLayer.options.fontSize || 12;
+        const charAdvance = fontSize * 0.6;
+        const lines = newFrames[0].split('\n');
+
+        let maxLen = 0;
+        if (activeLayer.options.renderMode === 'kinetic') {
+          maxLen = lines[0] ? lines[0].split('|').filter(Boolean).length : 0;
+        } else {
+          for (const l of lines) {
+            const clean = l.replace(/<[^>]*>/g, '').replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&').replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ');
+            if (clean.length > maxLen) maxLen = clean.length;
+          }
+        }
+
+        const contentW = maxLen * charAdvance;
+        const contentH = lines.length * fontSize;
+
+        // Target 85% of canvas size padding
+        const TARGET_W = 800 * 0.85;
+        const TARGET_H = 600 * 0.85;
+
+        if (contentW > TARGET_W || contentH > TARGET_H) {
+          const scaleW = TARGET_W / Math.max(1, contentW);
+          const scaleH = TARGET_H / Math.max(1, contentH);
+          const fitScale = Math.min(scaleW, scaleH);
+
+          // Only scale down to prevent tiny text becoming microscopic
+          if (fitScale < activeLayer.transform.scale) {
+            // Round to 2 decimal places to keep sliders clean
+            const roundedScale = Math.round(fitScale * 100) / 100;
+            updateLayerTransform(activeLayer.id, { scale: roundedScale });
+          }
+        }
+      }
 
     } catch (err: any) {
       console.error(err);
@@ -1013,6 +1100,113 @@ function PlaygroundContent() {
                   </div>
                 </div>
 
+                <motion.div variants={item} className="border-b border-white/[0.05]">
+                  <div className="p-0 overflow-hidden card-hover-animation">
+                    <button onClick={() => setShowAlgoSettings(!showAlgoSettings)}
+                      className="w-full px-5 py-4 flex items-center justify-between text-text-muted hover:text-text-primary transition-colors bg-surface-active/20">
+                      <div className="flex items-center gap-2">
+                        <span className="text-xs font-bold uppercase tracking-widest">Algorithm Settings</span>
+                      </div>
+                      <span className="text-xs">{showAlgoSettings ? '▲' : '▼'}</span>
+                    </button>
+
+                    {showAlgoSettings && (
+                      <div className="p-5 space-y-5 border-t border-border">
+                        {/* === Per-Algorithm Contextual Settings === */}
+                        {renderMode === 'kinetic' && (
+                          <div className="space-y-2">
+                            <label className="text-xs text-accent-primary uppercase tracking-wider font-bold">Kinetic Input Word</label>
+                            <input
+                              type="text"
+                              value={options.overlayText || ''}
+                              onChange={(e) => setOptions(p => ({ ...p, overlayText: e.target.value.toUpperCase() }))}
+                              placeholder="E.g. FUTURE"
+                              className="w-full bg-black border border-border rounded px-3 py-2 text-sm text-text-primary font-mono focus:border-accent-primary transition-colors"
+                            />
+                            <div className="text-[11px] text-text-muted mt-1">Words map brightness to 3D Z-depth and scale.</div>
+                          </div>
+                        )}
+                        {(renderMode === 'edge' || renderMode === 'outline') && (
+                          <Slider label="Edge Sensitivity" value={options.edgeThreshold || 30} min={5} max={100} onChange={(v) => setOptions(p => ({ ...p, edgeThreshold: v }))} valueDisplay={`${options.edgeThreshold || 30}`} />
+                        )}
+                        {(activeLayer?.file?.type.startsWith('image/') || renderMode === 'kinetic') && (
+                          <Slider label="Output Width" value={width} min={20} max={300} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} CH`} />
+                        )}
+                        {(activeLayer.file?.type.startsWith('video/') || activeLayer.file?.name.toLowerCase().endsWith('.gif')) && (
+                          <Slider label="Motion FPS" value={videoFps || 12} min={1} max={30} onChange={(v) => setOptions(p => ({ ...p, videoFps: v }))} valueDisplay={`${videoFps} FPS`} />
+                        )}
+
+                        {/* Algorithm-Specific Processing Toggles */}
+                        {renderMode !== 'kinetic' && (
+                          <div className="space-y-3 pt-3 border-t border-border/50">
+                            <label className="text-[10px] text-text-muted uppercase tracking-widest font-bold">Processing Options</label>
+                            <div className="grid grid-cols-1 gap-2">
+                              {/* Invert — available for all except halfblock */}
+                              {!['halfblock'].includes(renderMode) && (
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] text-text-muted uppercase tracking-tight">Invert Lighting</label>
+                                  <input type="checkbox" checked={!!inverted} onChange={(e) => setOptions(p => ({ ...p, inverted: e.target.checked }))}
+                                    className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
+                                </div>
+                              )}
+                              {/* Color Mode — available for standard, braille, edge, outline, silhouette, halftone, crosshatch, stipple */}
+                              {['standard', 'braille', 'edge', 'outline', 'silhouette', 'halftone', 'crosshatch', 'stipple'].includes(renderMode) && (
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] text-text-muted uppercase tracking-tight">Extract Colors</label>
+                                  <input type="checkbox" checked={!!colorMode} onChange={(e) => setOptions(p => ({ ...p, colorMode: e.target.checked }))}
+                                    className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
+                                </div>
+                              )}
+                              {/* CLAHE — available for all */}
+                              <div className="flex items-center justify-between">
+                                <label className="text-[10px] text-text-muted uppercase tracking-tight">Adaptive Contrast</label>
+                                <input type="checkbox" checked={!!clahe} onChange={(e) => setOptions(p => ({ ...p, clahe: e.target.checked }))}
+                                  className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
+                              </div>
+                              {/* Sharpen — available for all except outline (which always blurs) */}
+                              {renderMode !== 'outline' && (
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] text-text-muted uppercase tracking-tight">Sharpen Detail</label>
+                                  <input type="checkbox" checked={!!sharpen} onChange={(e) => setOptions(p => ({ ...p, sharpen: e.target.checked }))}
+                                    className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
+                                </div>
+                              )}
+                              {/* Dither — only for standard */}
+                              {renderMode === 'standard' && (
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] text-text-muted uppercase tracking-tight">Luminance Dither</label>
+                                  <input type="checkbox" checked={!!dither} onChange={(e) => setOptions(p => ({ ...p, dither: e.target.checked }))}
+                                    className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
+                                </div>
+                              )}
+                              {/* Isolate Motion — only for video/gif layers */}
+                              {(activeLayer.file?.type.startsWith('video/') || activeLayer.file?.type === 'image/gif' || activeLayer.file?.name.toLowerCase().endsWith('.gif')) && (
+                                <div className="flex items-center justify-between">
+                                  <label className="text-[10px] text-text-muted uppercase tracking-tight">Isolate Motion</label>
+                                  <input type="checkbox" checked={!!frameDiff} onChange={(e) => setOptions(p => ({ ...p, frameDiff: e.target.checked }))}
+                                    className="rounded-sm bg-black border-border text-accent-success focus:ring-0" />
+                                </div>
+                              )}
+                            </div>
+
+                            {/* Processing Sliders */}
+                            <div className="space-y-3 pt-2">
+                              {/* Blur — available for all except outline */}
+                              {renderMode !== 'outline' && (
+                                <Slider label="Blur Radius" value={blur || 0} min={0} max={5} step={0.5} onChange={(v) => setOptions(p => ({ ...p, blur: v }))} valueDisplay={blur > 0 ? blur.toFixed(1) : 'Off'} />
+                              )}
+                              {/* Noise — available for all */}
+                              <Slider label="Film Grain" value={noise || 0} min={0} max={100} step={5} onChange={(v) => setOptions(p => ({ ...p, noise: v }))} valueDisplay={noise > 0 ? noise.toString() : 'Off'} />
+                              {/* Posterize — available for all */}
+                              <Slider label="Posterize" value={posterize || 0} min={0} max={8} step={1} onChange={(v) => setOptions(p => ({ ...p, posterize: v }))} valueDisplay={posterize < 2 ? 'Off' : `${posterize} levels`} />
+                            </div>
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                </motion.div>
+
                 <div className="space-y-4 pt-5 border-t border-border">
                   <div className="flex items-center justify-between">
                     <label className="text-xs text-text-muted uppercase tracking-wider font-bold">Character Set</label>
@@ -1034,31 +1228,6 @@ function PlaygroundContent() {
                       Sort Density
                     </Button>
                   </div>
-                </div>
-
-                <div className="space-y-5 pt-5 border-t border-border">
-                  {renderMode === 'kinetic' && (
-                    <div className="space-y-2">
-                      <label className="text-xs text-accent-primary uppercase tracking-wider font-bold">Kinetic Input Word</label>
-                      <input
-                        type="text"
-                        value={options.overlayText || ''}
-                        onChange={(e) => setOptions(p => ({ ...p, overlayText: e.target.value.toUpperCase() }))}
-                        placeholder="E.g. FUTURE"
-                        className="w-full bg-black border border-border rounded px-3 py-2 text-sm text-text-primary font-mono focus:border-accent-primary transition-colors"
-                      />
-                      <div className="text-[11px] text-text-muted mt-1">Words map brightness to 3D Z-depth and scale.</div>
-                    </div>
-                  )}
-                  {renderMode === 'edge' && (
-                    <Slider label="Edge Sensitivity" value={options.edgeThreshold || 30} min={5} max={100} onChange={(v) => setOptions(p => ({ ...p, edgeThreshold: v }))} valueDisplay={`${options.edgeThreshold || 30}`} />
-                  )}
-                  {(activeLayer?.file?.type.startsWith('image/') || renderMode === 'kinetic') && (
-                    <Slider label="Output Width" value={width} min={20} max={300} onChange={(v) => setOptions(p => ({ ...p, width: v }))} valueDisplay={`${width} CH`} />
-                  )}
-                  {(activeLayer.file?.type.startsWith('video/') || activeLayer.file?.name.toLowerCase().endsWith('.gif')) && (
-                    <Slider label="Motion FPS" value={videoFps || 12} min={1} max={30} onChange={(v) => setOptions(p => ({ ...p, videoFps: v }))} valueDisplay={`${videoFps} FPS`} />
-                  )}
                 </div>
               </motion.div>
             )}
@@ -1593,8 +1762,14 @@ function PlaygroundContent() {
             </div>
           </div>
 
-          <div ref={compositionRef} className={clsx("flex-1 relative overflow-hidden flex items-center justify-center min-h-[400px]", isRecording && "cursor-none", isVideoExporting && "pointer-events-none")}
+          <div ref={compositionRef} className={clsx("flex-1 relative overflow-hidden flex items-center justify-center min-h-[400px]", isRecording && "cursor-none", isVideoExporting && "pointer-events-none", isCanvasPanning && "!cursor-grabbing")}
             style={{ background: activeLayer?.options.bgTheme?.bg || '#000000' }}
+            onWheel={handleCanvasWheel}
+            onPointerDown={handleCanvasPointerDown}
+            onPointerMove={handleCanvasPointerMove}
+            onPointerUp={handleCanvasPointerUp}
+            onPointerLeave={handleCanvasPointerUp}
+            onContextMenu={(e) => { if (e.altKey) e.preventDefault(); }}
           >
             {/* Offline Rendering Overlay */}
             <AnimatePresence>
@@ -1624,24 +1799,44 @@ function PlaygroundContent() {
             </AnimatePresence>
 
             {/* Composition Canvas */}
-            <CompositionCanvas
-              layers={layers}
-              activeLayerId={activeLayerId}
-              onSelectLayer={setActiveLayerId}
-              onUpdateTransform={(id, t) => updateLayerTransform(id, t)}
-              onUpdateTransformEnd={(id, t) => commitLayerTransform(id, t)}
-              width={800} height={600} scale={1}
-              globalFrameCount={globalFrameCount}
-              currentTime={currentTime}
-              maxDuration={maxDuration}
-              audioMetrics={audioMetrics}
-              isRecording={isRecording}
-              globalEffects={globalEffects}
-            />
+            <div
+              style={{
+                width: 800,
+                height: 600,
+                transform: `translate(${canvasPan.x}px, ${canvasPan.y}px) scale(${canvasScale})`,
+                transformOrigin: 'center center'
+              }}
+              className="relative flex-shrink-0"
+            >
+              <CompositionCanvas
+                layers={layers}
+                activeLayerId={activeLayerId}
+                onSelectLayer={setActiveLayerId}
+                onUpdateTransform={(id, t) => updateLayerTransform(id, t)}
+                onUpdateTransformEnd={(id, t) => commitLayerTransform(id, t)}
+                width={800} height={600} scale={canvasScale}
+                globalFrameCount={globalFrameCount}
+                currentTime={currentTime}
+                maxDuration={maxDuration}
+                audioMetrics={audioMetrics}
+                isRecording={isRecording}
+                globalEffects={globalEffects}
+              />
+            </div>
+
+            {/* View Controls Overlay */}
+            <div className="absolute bottom-4 right-4 flex gap-2 z-40">
+              <button className="h-7 text-[10px] uppercase font-bold tracking-widest px-3 bg-[#050505] border border-white/10 hover:bg-white/10 text-white rounded transition-colors" onClick={() => { setCanvasScale(1); setCanvasPan({ x: 0, y: 0 }); }}>Reset View</button>
+              <div className="flex bg-[#050505] border border-white/10 rounded overflow-hidden text-white/80">
+                <button className="px-3 py-0.5 hover:bg-white/10 transition-colors font-bold" title="Zoom Out" onClick={() => setCanvasScale(s => Math.max(0.1, s - 0.1))}>-</button>
+                <span className="px-2 py-0.5 text-[10px] font-mono flex items-center w-12 justify-center border-l border-r border-white/5">{Math.round(canvasScale * 100)}%</span>
+                <button className="px-3 py-0.5 hover:bg-white/10 transition-colors font-bold" title="Zoom In" onClick={() => setCanvasScale(s => Math.min(10, s + 0.1))}>+</button>
+              </div>
+            </div>
           </div>
 
           {/* ─── Bottom Panel (Timeline / Node Graph) ─── */}
-          <div className="h-[300px] flex flex-col border-t border-white/[0.05] bg-[#000000] shrink-0 z-20">
+          <div className={clsx("h-[200px] flex flex-col border-t border-white/[0.05] bg-[#000000] shrink-0 z-20", isVideoExporting && "pointer-events-none opacity-50")}>
             <div className="h-10 border-b border-white/[0.05] flex bg-[#050505] justify-between items-center pr-4">
               <div className="flex h-full">
                 <button

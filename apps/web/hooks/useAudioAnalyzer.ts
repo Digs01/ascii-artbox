@@ -16,6 +16,7 @@ export function useAudioAnalyzer() {
     const audioContextRef = useRef<AudioContext | null>(null);
     const analyserRef = useRef<AnalyserNode | null>(null);
     const sourceRef = useRef<MediaStreamAudioSourceNode | MediaElementAudioSourceNode | null>(null);
+    const mediaStreamRef = useRef<MediaStream | null>(null); // For stopping mic tracks
     const dataArrayRef = useRef<Uint8Array | null>(null);
 
     // File Audio Refs
@@ -65,6 +66,7 @@ export function useAudioAnalyzer() {
             // But it IS connected to streamDestinationRef via gainNode
 
             sourceRef.current = source;
+            mediaStreamRef.current = stream;
             setSourceType('mic');
             setIsListening(true);
         } catch (err) {
@@ -109,6 +111,10 @@ export function useAudioAnalyzer() {
 
     const stopAudio = () => {
         if (sourceRef.current) sourceRef.current.disconnect();
+        if (mediaStreamRef.current) {
+            mediaStreamRef.current.getTracks().forEach(track => track.stop());
+            mediaStreamRef.current = null;
+        }
         if (audioElementRef.current) {
             audioElementRef.current.pause();
             audioElementRef.current = null;
@@ -147,6 +153,9 @@ export function useAudioAnalyzer() {
     // Cleanup
     useEffect(() => {
         return () => {
+            if (mediaStreamRef.current) {
+                mediaStreamRef.current.getTracks().forEach(t => t.stop());
+            }
             if (audioContextRef.current) {
                 audioContextRef.current.close();
             }

@@ -154,7 +154,17 @@ export const Timeline: React.FC<TimelineProps> = ({
     const handleTrackMouseLeave = () => setHoveredTime(null);
 
     const toggleGroup = (label: string) => {
-        setExpandedGroups(prev => ({ ...prev, [label]: !prev[label] }));
+        setExpandedGroups(prev => {
+            const isExpanding = !prev[label];
+            if (isExpanding) {
+                // True accordion: close others
+                const newState: Record<string, boolean> = {};
+                Object.keys(prev).forEach(k => newState[k] = false);
+                newState[label] = true;
+                return newState;
+            }
+            return { ...prev, [label]: false };
+        });
     };
 
     const getLiveValue = (propId: string): any => {
@@ -214,7 +224,7 @@ export const Timeline: React.FC<TimelineProps> = ({
     const totalKeyframes = activeLayer?.animationTracks?.reduce((sum, t) => sum + t.keyframes.length, 0) || 0;
 
     return (
-        <div ref={containerRef} className="relative flex flex-col bg-[#060608] text-[10px] font-mono select-none overflow-hidden timeline-container" style={{ height: '220px' }}>
+        <div ref={containerRef} className="relative flex flex-col bg-[#060608] text-[10px] font-mono select-none overflow-hidden timeline-container h-full">
             {/* ─── Top Status Bar ─── */}
             <div className="flex items-center h-7 bg-[#0c0c10] border-b border-white/[0.04] px-3 gap-3 shrink-0">
                 <div className="flex items-center gap-1.5">
@@ -238,8 +248,8 @@ export const Timeline: React.FC<TimelineProps> = ({
                         onClick={onToggleAutoKeyframe}
                         title={autoKeyframe ? 'Auto-Keyframe ON: slider changes are recorded as keyframes' : 'Auto-Keyframe OFF: click to enable'}
                         className={`flex items-center gap-1.5 px-2 py-0.5 rounded text-[8px] font-bold uppercase tracking-widest border transition-all duration-200 ${autoKeyframe
-                                ? 'bg-red-500/15 border-red-500/40 text-red-400 hover:bg-red-500/25'
-                                : 'bg-white/[0.03] border-white/[0.06] text-zinc-600 hover:text-zinc-400'
+                            ? 'bg-red-500/15 border-red-500/40 text-red-400 hover:bg-red-500/25'
+                            : 'bg-white/[0.03] border-white/[0.06] text-zinc-600 hover:text-zinc-400'
                             }`}
                     >
                         <div className={`w-1.5 h-1.5 rounded-full ${autoKeyframe ? 'bg-red-400 timeline-pulse-dot' : 'bg-zinc-700'

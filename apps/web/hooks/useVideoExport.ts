@@ -30,6 +30,9 @@ export function useVideoExport({
         setStatus('Initializing encoder...');
         abortControllerRef.current = new AbortController();
 
+        let encoder: VideoEncoder | null = null;
+        let muxer: any = null;
+
         try {
             // Dynamically load muxer based on format (these only work in browser)
             if (format === 'mp4') {
@@ -42,7 +45,7 @@ export function useVideoExport({
 
             // 1. Setup Muxer
             const MuxerClass = format === 'mp4' ? MuxerModule.Muxer : MuxerModule.WebMMuxer;
-            const muxer = new MuxerClass({
+            muxer = new MuxerClass({
                 target: new MuxerModule.ArrayBufferTarget(),
                 video: {
                     codec: format === 'mp4' ? 'avc' : 'V_VP9',
@@ -65,7 +68,7 @@ export function useVideoExport({
                 framerate: fps,
             };
 
-            const encoder = new VideoEncoder(initOptions);
+            encoder = new VideoEncoder(initOptions);
             encoder.configure(encoderConfig);
 
             // 2. Rendering Loop
@@ -109,8 +112,8 @@ export function useVideoExport({
             // 3. Finalize Encoding
             setStatus('Finalizing video file...');
             await encoder.flush();
-            muxer.finalize();
-            encoder.close();
+            try { muxer.finalize(); } catch (e) { } // Muxer might throw if no frames added
+            try { encoder.close(); } catch (e) { }
 
             // 4. Download Result
             const { buffer } = muxer.target;
@@ -132,6 +135,7 @@ export function useVideoExport({
             console.error('Video Export Failed:', err);
             setStatus(`Error: ${err.message}`);
         } finally {
+            // ALWAYS cleanup AbortController and state
             setTimeout(() => {
                 setIsExporting(false);
                 setStatus('');

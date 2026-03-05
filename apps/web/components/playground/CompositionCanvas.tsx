@@ -58,8 +58,8 @@ export function CompositionCanvas({
     globalEffects
 }: CompositionCanvasProps) {
 
-    const [isDragging, setIsDragging] = useState(false);
-    const dragStartRef = useRef({ x: 0, y: 0 });
+    const [dragMode, setDragMode] = useState<'translate' | 'scale' | 'rotate' | null>(null);
+    const dragStartRef = useRef({ x: 0, y: 0, initialTransform: { x: 0, y: 0, scale: 1, rotation: 0 } });
     const activeLayerRef = useRef<Layer | null>(null);
 
     // --- 3D INTERACTIVE HOLOGRMA ---
@@ -81,14 +81,19 @@ export function CompositionCanvas({
         gridResolution: 12 // approximate font size for grid matching
     });
 
-    const handleMouseDown = (e: React.MouseEvent, layer: Layer) => {
+    const handleMouseDown = (e: React.MouseEvent, layer: Layer, mode: 'translate' | 'scale' | 'rotate' = 'translate') => {
         if (layer.locked) return;
 
         e.stopPropagation();
         e.preventDefault();
         onSelectLayer(layer.id);
         setIsDragging(true);
-        dragStartRef.current = { x: e.clientX, y: e.clientY };
+        setDragMode(mode);
+        dragStartRef.current = {
+            x: e.clientX,
+            y: e.clientY,
+            initialTransform: { ...layer.transform }
+        };
         activeLayerRef.current = layer;
     };
 
@@ -106,24 +111,39 @@ export function CompositionCanvas({
             mouseY.set(e.clientY - centerY);
         }
 
-        if (!isDragging || !activeLayerRef.current) return;
+        if (!isDragging || !activeLayerRef.current || !dragMode) return;
 
         const dx = (e.clientX - dragStartRef.current.x) / scale;
         const dy = (e.clientY - dragStartRef.current.y) / scale;
+        const initial = dragStartRef.current.initialTransform;
 
-        onUpdateTransform(activeLayerRef.current.id, {
-            x: activeLayerRef.current.transform.x + dx,
-            y: activeLayerRef.current.transform.y + dy
-        });
-
-        dragStartRef.current = { x: e.clientX, y: e.clientY };
-    }, [isDragging, onUpdateTransform, scale, globalEffects, fluid]);
+        if (dragMode === 'translate') {
+            onUpdateTransform(activeLayerRef.current.id, {
+                x: initial.x + dx,
+                y: initial.y + dy
+            });
+        } else if (dragMode === 'scale') {
+            // Simple uniform scale based on primary diagonal drag distance
+            // Negative dx/dy means dragging left/up (shrinking)
+            // We use the dominant axis movement to scale uniformly
+            const delta = (Math.abs(dx) > Math.abs(dy) ? dx : dy) * 0.01;
+            const newScale = Math.max(0.1, initial.scale + delta);
+            onUpdateTransform(activeLayerRef.current.id, { scale: newScale });
+        } else if (dragMode === 'rotate') {
+            // Calculate angle between center of element and mouse position
+            // Since dx/dy are relative to start click, we map the x movement to rotation
+            // 1px = roughly 1 degree for intuitive scrubbing
+            const newRotation = initial.rotation + dx;
+            onUpdateTransform(activeLayerRef.current.id, { rotation: newRotation });
+        }
+    }, [isDragging, dragMode, onUpdateTransform, scale, globalEffects, fluid]);
 
     const handleMouseUp = () => {
         if (isDragging && activeLayerRef.current && onUpdateTransformEnd) {
             onUpdateTransformEnd(activeLayerRef.current.id, activeLayerRef.current.transform);
         }
         setIsDragging(false);
+        setDragMode(null);
         activeLayerRef.current = null;
     };
 
@@ -152,13 +172,33 @@ export function CompositionCanvas({
                 // Inline styles override classes, so we only set cursor inline if NOT recording
                 // Wait, if recording, CSS '!cursor-none' wins over inline? Yes with '!'
                 // But inline is specific. Let's ensure inline cursor IS default if not recording.
-                cursor: isRecording ? 'none' : (isDragging ? 'grabbing' : 'default')
+                cursor: isRecording ? 'none' : (isDragging && dragMode === 'translate' ? 'grabbing' : 'default')
                 // But wait, if isRecording is true, we force 'none' anyway?
             }}
             onMouseMove={handleMouseMove}
             onMouseUp={handleMouseUp}
             onMouseLeave={handleMouseLeave}
         >
+            {/* GLOBAL OVERLAYS (Screen Space) */}
+            {globalEffects?.crtScanlines && (
+                <div className="absolute inset-0 z-[100] pointer-events-none"
+                    style={{
+                        opacity: globalEffects.scanlineOpacity ?? 0.2,
+                        backgroundImage: `linear-gradient(rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06))`,
+                        backgroundSize: `100% ${globalEffects.scanlineWidth ?? 4}px, 6px 100%`,
+                        mixBlendMode: 'multiply' // Helps it blend into bright ASCII art organically
+                    }}
+                />
+            )}
+            {globalEffects?.vignette && (
+                <div className="absolute inset-0 z-[90] pointer-events-none"
+                    style={{
+                        background: `radial-gradient(circle at center, transparent ${globalEffects.vignetteSize ?? 40}%, rgba(0,0,0,${globalEffects.vignetteIntensity ?? 0.8}) 120%)`,
+                        mixBlendMode: 'multiply'
+                    }}
+                />
+            )}
+
             <motion.div
                 style={{
                     width: '100%',
@@ -170,25 +210,6 @@ export function CompositionCanvas({
                 }}
                 className="relative w-full h-full"
             >
-                {/* GLOBAL OVERLAYS */}
-                {globalEffects?.crtScanlines && (
-                    <div className="absolute inset-0 z-[100] pointer-events-none"
-                        style={{
-                            opacity: globalEffects.scanlineOpacity ?? 0.2,
-                            backgroundImage: `linear-gradient(rgba(0, 0, 0, 0) 50%, rgba(0, 0, 0, 0.25) 50%), linear-gradient(90deg, rgba(255, 0, 0, 0.06), rgba(0, 255, 0, 0.02), rgba(0, 0, 255, 0.06))`,
-                            backgroundSize: `100% ${globalEffects.scanlineWidth ?? 4}px, 6px 100%`,
-                            transform: 'translateZ(1000px)' // Force overlay to front
-                        }}
-                    />
-                )}
-                {globalEffects?.vignette && (
-                    <div className="absolute inset-0 z-[90] pointer-events-none"
-                        style={{
-                            background: `radial-gradient(circle at center, transparent ${globalEffects.vignetteSize ?? 40}%, rgba(0,0,0,${globalEffects.vignetteIntensity ?? 0.8}) 120%)`,
-                            transform: 'translateZ(900px)' // Force overlay space
-                        }}
-                    />
-                )}
                 {layers.map((layer, index) => (
                     <AsciiLayer
                         key={layer.id}
@@ -202,6 +223,7 @@ export function CompositionCanvas({
                         globalEffects={globalEffects}
                         onMouseDown={handleMouseDown}
                         fluid={fluid}
+                        isRecording={isRecording}
                     />
                 ))}
             </motion.div>
@@ -230,8 +252,9 @@ const AsciiLayer = memo(({
     currentTime: number;
     audioMetrics: any;
     globalEffects: any;
-    onMouseDown: (e: React.MouseEvent, layer: Layer) => void;
+    onMouseDown: (e: React.MouseEvent, layer: Layer, mode?: 'translate' | 'scale' | 'rotate') => void;
     fluid: any;
+    isRecording: boolean;
 }) => {
     if (!layer.visible) return null;
 
@@ -304,7 +327,8 @@ const AsciiLayer = memo(({
     }
 
     if (globalEffects?.bloom) {
-        filterStyle += ' drop-shadow(0px 0px 8px currentColor) drop-shadow(0px 0px 16px currentColor)';
+        const radius = globalEffects.bloomRadius || 8;
+        filterStyle += ` drop-shadow(0px 0px ${radius}px currentColor) drop-shadow(0px 0px ${radius * 2}px currentColor)`;
     }
 
     // --- GRID DIMENSIONS (Unify 0.6 Aspect Ratio) ---
@@ -379,12 +403,14 @@ const AsciiLayer = memo(({
                         layer={{ ...layer, options, transform }}
                         audioMetrics={audioMetrics}
                         fluid={fluid}
+                        globalEffects={globalEffects}
                     />
                 ) : options.colorMode || activeFrame.includes('<span') ? (
                     <ColorCanvasRenderer
                         frame={activeFrame}
                         layer={{ ...layer, options, transform }}
                         audioMetrics={audioMetrics}
+                        globalEffects={globalEffects}
                     />
                 ) : (
                     <pre
@@ -399,6 +425,28 @@ const AsciiLayer = memo(({
                     >
                         {activeFrame}
                     </pre>
+                )}
+
+                {/* Transform Gizmo Overlay */}
+                {layer.id === activeLayerId && !isRecording && (
+                    <div className="absolute inset-0 border-2 border-primary/80 pointer-events-none" style={{ left: -1, right: -1, top: -1, bottom: -1 }}>
+                        {/* Rotation Handle */}
+                        <div className="absolute -top-8 left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-auto cursor-ew-resize"
+                            onMouseDown={(e) => onMouseDown(e, layer, 'rotate')}>
+                            <div className="w-3 h-3 bg-white border-2 border-primary rounded-full hover:scale-125 transition-transform" />
+                            <div className="w-0.5 h-4 bg-primary/80" />
+                        </div>
+
+                        {/* Scale Handles (Corners) */}
+                        <div className="absolute -top-1.5 -left-1.5 w-3 h-3 bg-white border border-primary pointer-events-auto cursor-nwse-resize hover:scale-125 transition-transform"
+                            onMouseDown={(e) => onMouseDown(e, layer, 'scale')} />
+                        <div className="absolute -top-1.5 -right-1.5 w-3 h-3 bg-white border border-primary pointer-events-auto cursor-nesw-resize hover:scale-125 transition-transform"
+                            onMouseDown={(e) => onMouseDown(e, layer, 'scale')} />
+                        <div className="absolute -bottom-1.5 -left-1.5 w-3 h-3 bg-white border border-primary pointer-events-auto cursor-nesw-resize hover:scale-125 transition-transform"
+                            onMouseDown={(e) => onMouseDown(e, layer, 'scale')} />
+                        <div className="absolute -bottom-1.5 -right-1.5 w-3 h-3 bg-white border border-primary pointer-events-auto cursor-nwse-resize hover:scale-125 transition-transform"
+                            onMouseDown={(e) => onMouseDown(e, layer, 'scale')} />
+                    </div>
                 )}
             </div>
         </div>
@@ -437,7 +485,7 @@ const AsciiLayer = memo(({
 });
 
 // Dedicated inline Canvas renderer for Color HTML mode to vastly improve performance
-const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, layer: Layer, audioMetrics?: any }) => {
+const ColorCanvasRenderer = ({ frame, layer, audioMetrics, globalEffects }: { frame: string, layer: Layer, audioMetrics?: any, globalEffects?: any }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
 
     useEffect(() => {
@@ -507,8 +555,11 @@ const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, la
         ctx.font = `${fontSize}px monospace`;
         const charAdvance = fontSize * 0.6; // Consistent 0.6 ratio
 
-        const gridWidth = Math.ceil(maxChars * charAdvance) + 2; // +2px buffer
-        const totalHeight = (lines.length * fontSize) + 2; // +2px buffer
+        // Add padding if Phosphor Bloom is active to allow CSS drop-shadow to bleed over without hard clipping
+        const bloomPadding = globalEffects?.bloom ? (globalEffects.bloomRadius || 8) * 3 : 2;
+
+        const gridWidth = Math.ceil(maxChars * charAdvance) + (bloomPadding * 2);
+        const totalHeight = (lines.length * fontSize) + (bloomPadding * 2);
 
         if (canvas.width !== gridWidth || canvas.height !== totalHeight) {
             canvas.width = gridWidth || 800;
@@ -529,11 +580,21 @@ const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, la
                     ctx.fillStyle = t.color;
                     lastColor = t.color;
                 }
-                ctx.fillText(t.char, t.x * charAdvance, t.lineY);
+                ctx.fillText(t.char, (t.x * charAdvance) + bloomPadding, t.lineY + bloomPadding);
             }
         }
-    }, [frame, layer, audioMetrics]);
+    }, [frame, layer, audioMetrics, globalEffects]);
 
-    return <canvas ref={canvasRef} style={{ display: 'block' }} />;
+    return (
+        <canvas
+            ref={canvasRef}
+            style={{
+                display: 'block',
+                position: 'absolute',
+                top: -(globalEffects?.bloom ? (globalEffects.bloomRadius || 8) * 3 : 2),
+                left: -(globalEffects?.bloom ? (globalEffects.bloomRadius || 8) * 3 : 2)
+            }}
+        />
+    );
 };
 
