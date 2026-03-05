@@ -318,26 +318,32 @@ const AsciiLayer = memo(({
         if (options.renderMode === 'kinetic') {
             charCount = lines[0] ? lines[0].split('|').filter(Boolean).length : 0;
         } else {
-            // Strip HTML and unescape for accurate char count
-            const firstLineClean = lines[0]
-                ? lines[0].replace(/<[^>]*>/g, '')
-                    .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
-                    .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
-                : '';
-            charCount = firstLineClean.length;
+            // Strip HTML and unescape for accurate char count across ALL lines
+            let maxLineLength = 0;
+            for (let i = 0; i < lines.length; i++) {
+                const cleanLine = lines[i]
+                    ? lines[i].replace(/<[^>]*>/g, '')
+                        .replace(/&lt;/g, '<').replace(/&gt;/g, '>').replace(/&amp;/g, '&')
+                        .replace(/&quot;/g, '"').replace(/&apos;/g, "'").replace(/&nbsp;/g, ' ')
+                    : '';
+                if (cleanLine.length > maxLineLength) {
+                    maxLineLength = cleanLine.length;
+                }
+            }
+            charCount = maxLineLength;
         }
 
         contentSize = {
-            w: charCount * charAdvance,
-            h: lines.length * fontSize
+            w: (charCount * charAdvance) + 2, // +2px buffer for subpixel anti-aliasing bleed
+            h: (lines.length * fontSize) + 2
         };
     }
 
     return (
-        <div className="absolute w-full h-full pointer-events-none" style={{ zIndex: totalLayers - index }}>
+        <div className="absolute w-full h-full pointer-events-none overflow-visible" style={{ zIndex: totalLayers - index }}>
             {svgFilter}
             <div
-                className={`absolute origin-center select-none pointer-events-auto ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
+                className={`absolute origin-center select-none pointer-events-auto overflow-visible ${transform.lut && transform.lut !== 'none' ? `lut-${transform.lut}` : ''}`}
                 style={{
                     left: '50%',
                     top: '50%',
@@ -501,8 +507,8 @@ const ColorCanvasRenderer = ({ frame, layer, audioMetrics }: { frame: string, la
         ctx.font = `${fontSize}px monospace`;
         const charAdvance = fontSize * 0.6; // Consistent 0.6 ratio
 
-        const gridWidth = Math.ceil(maxChars * charAdvance);
-        const totalHeight = lines.length * fontSize;
+        const gridWidth = Math.ceil(maxChars * charAdvance) + 2; // +2px buffer
+        const totalHeight = (lines.length * fontSize) + 2; // +2px buffer
 
         if (canvas.width !== gridWidth || canvas.height !== totalHeight) {
             canvas.width = gridWidth || 800;
