@@ -59,6 +59,7 @@ export function CompositionCanvas({
 }: CompositionCanvasProps) {
 
     const [dragMode, setDragMode] = useState<'translate' | 'scale' | 'rotate' | null>(null);
+    const [isDragging, setIsDragging] = useState(false);
     const dragStartRef = useRef({ x: 0, y: 0, initialTransform: { x: 0, y: 0, scale: 1, rotation: 0 } });
     const activeLayerRef = useRef<Layer | null>(null);
 
@@ -242,7 +243,8 @@ const AsciiLayer = memo(({
     audioMetrics,
     globalEffects,
     onMouseDown,
-    fluid
+    fluid,
+    isRecording
 }: {
     layer: Layer;
     index: number;
