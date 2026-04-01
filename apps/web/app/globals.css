@@ -223,3 +223,92 @@
 .timeline-container {
     background: linear-gradient(180deg, #0a0a0e 0%, #060608 100%);
 }
+
+/* ─── UX Polish Additions ─── */
+
+/* Panel entry animation */
+@keyframes fadeSlideIn {
+    from {
+        opacity: 0;
+        transform: translateY(8px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.animate-fade-slide-in {
+    animation: fadeSlideIn 0.2s ease-out;
+}
+
+/* Drag handle for resizable panels */
+.drag-handle {
+    cursor: row-resize;
+    user-select: none;
+    touch-action: none;
+    transition: background-color 0.15s ease;
+}
+
+.drag-handle:hover,
+.drag-handle:active {
+    background-color: rgba(255, 255, 255, 0.08);
+}
+
+.drag-handle::after {
+    content: '';
+    display: block;
+    width: 40px;
+    height: 3px;
+    margin: 0 auto;
+    border-radius: 3px;
+    background: rgba(255, 255, 255, 0.15);
+    transition: background 0.15s ease, width 0.15s ease;
+}
+
+.drag-handle:hover::after {
+    background: rgba(255, 255, 255, 0.35);
+    width: 60px;
+}
+
+/* Keyboard shortcut badge */
+.shortcut-key {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    min-width: 20px;
+    height: 20px;
+    padding: 0 5px;
+    font-size: 10px;
+    font-family: ui-monospace, SFMono-Regular, monospace;
+    font-weight: 700;
+    color: rgba(255, 255, 255, 0.5);
+    background: rgba(255, 255, 255, 0.05);
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    border-radius: 4px;
+    line-height: 1;
+}
+
+/* Sidebar collapse/expand transition */
+.sidebar-transition {
+    transition: width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                min-width 0.25s cubic-bezier(0.4, 0, 0.2, 1),
+                opacity 0.2s ease;
+}
+
+/* Focus visible ring for accessible keyboard nav */
+*:focus-visible {
+    outline: 2px solid rgba(255, 255, 255, 0.3);
+    outline-offset: 2px;
+    border-radius: 2px;
+}
+
+input[type="range"]:focus-visible {
+    outline: none;
+}
+
+/* Shortcut overlay backdrop */
+.shortcut-overlay-backdrop {
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+}

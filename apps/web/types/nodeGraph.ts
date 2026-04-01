@@ -20,7 +20,13 @@ export type NodeKind =
     | 'oscillator'
     | 'range-map'
     | 'smooth'
-    | 'layer-property';
+    | 'layer-property'
+    // ─── New in Animation Additions ───
+    | 'noise'       // Continuous pseudo-random noise signal
+    | 'delay'       // Time-delayed version of any signal
+    | 'compare'     // Outputs 0 or 1 based on comparison (A > B, etc.)
+    | 'select'      // if condition > 0.5 → A, else → B
+    | 'color-lerp'; // Interpolate between two hex colors
 
 export interface GraphNode {
     id: string;
@@ -91,6 +97,38 @@ export function createNodePorts(kind: NodeKind): Port[] {
             return [
                 { id: 'value', label: 'Value', type: 'any', direction: 'input', defaultValue: 0 },
             ];
+
+        // ─── New Nodes ───────────────────────────────────────────────────────
+        case 'noise':
+            return [
+                { id: 'freq', label: 'Frequency', type: 'number', direction: 'input', defaultValue: 1 },
+                { id: 'amplitude', label: 'Amplitude', type: 'number', direction: 'input', defaultValue: 1 },
+                { id: 'out', label: 'Value', type: 'number', direction: 'output' },
+            ];
+        case 'delay':
+            return [
+                { id: 'in', label: 'Input', type: 'number', direction: 'input', defaultValue: 0 },
+                { id: 'out', label: 'Delayed', type: 'number', direction: 'output' },
+            ];
+        case 'compare':
+            return [
+                { id: 'a', label: 'A', type: 'number', direction: 'input', defaultValue: 0 },
+                { id: 'b', label: 'B', type: 'number', direction: 'input', defaultValue: 0 },
+                { id: 'out', label: '0 or 1', type: 'number', direction: 'output' },
+            ];
+        case 'select':
+            return [
+                { id: 'condition', label: 'If', type: 'number', direction: 'input', defaultValue: 0 },
+                { id: 'a', label: 'True', type: 'number', direction: 'input', defaultValue: 1 },
+                { id: 'b', label: 'False', type: 'number', direction: 'input', defaultValue: 0 },
+                { id: 'out', label: 'Result', type: 'number', direction: 'output' },
+            ];
+        case 'color-lerp':
+            return [
+                { id: 't', label: 'T (0→1)', type: 'number', direction: 'input', defaultValue: 0 },
+                { id: 'out', label: 'Color', type: 'color', direction: 'output' },
+            ];
+
         default:
             return [];
     }
@@ -114,6 +152,19 @@ export function createNodeDefaults(kind: NodeKind): Record<string, any> {
             return { factor: 0.9 };
         case 'layer-property':
             return { property: 'transform.scale' };
+
+        // ─── New Nodes ───────────────────────────────────────────────────────
+        case 'noise':
+            return { seed: 42 };
+        case 'delay':
+            return { delaySeconds: 0.5 };
+        case 'compare':
+            return { op: '>' }; // > | < | >= | <= | ===
+        case 'select':
+            return {};
+        case 'color-lerp':
+            return { colorA: '#00ff88', colorB: '#ff00cc' };
+
         default:
             return {};
     }
